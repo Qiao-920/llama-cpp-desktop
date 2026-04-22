@@ -1,0 +1,38 @@
+<svg width="1100" height="620" viewBox="0 0 1100 620" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1100" height="620" rx="26" fill="#F7FAF7"/>
+  <rect x="22" y="22" width="1056" height="576" rx="20" fill="white" stroke="#E3E5DF"/>
+  <rect x="22" y="22" width="246" height="576" rx="20" fill="#F2F6F2"/>
+  <path d="M268 22V598" stroke="#E3E5DF"/>
+  <rect x="42" y="48" width="42" height="42" rx="10" fill="#141713"/>
+  <text x="58" y="75" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="17" font-weight="700" fill="#DCEBD7">ll</text>
+  <text x="98" y="66" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="22" font-weight="800" fill="#151713">llama.cpp</text>
+  <text x="98" y="87" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="12" fill="#6F746D">OpenAI compatible local endpoint</text>
+  <rect x="42" y="130" width="198" height="38" rx="8" fill="#ECEEE8"/>
+  <text x="58" y="154" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="700" fill="#506F51">新聊天</text>
+  <rect x="42" y="178" width="198" height="38" rx="8" fill="#ECEEE8"/>
+  <text x="58" y="202" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="700" fill="#506F51">搜索对话</text>
+  <text x="42" y="252" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="12" fill="#6F746D">历史对话</text>
+  <rect x="42" y="272" width="198" height="50" rx="10" fill="#EAF2E8"/>
+  <text x="58" y="294" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="700" fill="#151713">介绍一下自己</text>
+  <text x="58" y="314" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="12" fill="#6F746D">04/22 17:20</text>
+  <rect x="42" y="505" width="198" height="62" rx="10" fill="white" stroke="#E3E5DF"/>
+  <circle cx="60" cy="532" r="6" fill="#506F51"/>
+  <text x="76" y="529" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="18" font-weight="800" fill="#151713">运行中</text>
+  <text x="76" y="549" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="12" fill="#6F746D">http://127.0.0.1:8080</text>
+  <text x="626" y="116" text-anchor="middle" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="34" font-weight="800" fill="#151713">llama.cpp</text>
+  <text x="626" y="146" text-anchor="middle" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="16" fill="#6F746D">输入消息，或把本地服务接给 OpenClaw、Claude Code 和任何 OpenAI 兼容客户端。</text>
+  <rect x="392" y="206" width="470" height="96" rx="12" fill="#EDF5EB" stroke="#C8D9C2"/>
+  <text x="424" y="245" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="18" font-weight="700" fill="#151713">你好，帮我写一个 API 请求示例</text>
+  <rect x="362" y="340" width="530" height="96" rx="12" fill="white" stroke="#E3E5DF"/>
+  <text x="394" y="378" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="16" fill="#151713">正在流式回复，本地 llama.cpp 服务继续后台运行。</text>
+  <rect x="394" y="402" width="130" height="22" rx="8" fill="#F1F2EE"/>
+  <text x="410" y="417" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="11" fill="#6F746D">Qwen3.5-9B.Q4_K_M</text>
+  <rect x="326" y="472" width="600" height="82" rx="12" fill="white" stroke="#E3E5DF"/>
+  <text x="356" y="506" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="16" fill="#8A8F86">输入一条消息......</text>
+  <rect x="356" y="520" width="34" height="34" rx="8" fill="#F1F2EE"/>
+  <text x="368" y="543" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="24" fill="#151713">+</text>
+  <rect x="730" y="520" width="142" height="34" rx="8" fill="#F1F2EE"/>
+  <text x="750" y="542" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13" fill="#151713">Qwen3.5-9B.Q4_K_M</text>
+  <rect x="882" y="520" width="34" height="34" rx="8" fill="#7B8079"/>
+  <path d="M899 543V531M899 531L894 536M899 531L904 536" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
