@@ -64,10 +64,11 @@ function defaultConfig() {
     mmproj: '',
     host: '0.0.0.0',
     port: 8080,
-    ctx_size: 72000,
+    ctx_size: 32768,
     n_predict: -1,
     n_gpu_layers: 99,
     chat_template_kwargs: '{"enable_thinking": false}',
+    request_timeout_ms: 600000,
     temp: 0.8,
     top_k: 20,
     top_p: 0.95,
@@ -84,6 +85,10 @@ function defaultConfig() {
     split_mode: 'layer',
     tensor_split: '',
     main_gpu: '',
+    extra_args: '',
+    show_thinking: true,
+    expand_thinking: false,
+    show_raw_output: false,
     verbose: true,
     log_verbosity: 3,
     webui: true,
@@ -147,17 +152,58 @@ function stripAnsi(value) {
     .replace(/\[[0-9;]*m/g, '')
 }
 
+function compactLogLine(source, line) {
+  const text = String(line || '').trim()
+  const lower = text.toLowerCase()
+  const isError = lower.includes('error') || lower.includes('fail') || lower.includes('exception')
+  const routinePatterns = [
+    'que start_loop: waiting for new tasks',
+    'que start_loop: processing new tasks',
+    'srv update_slots: all slots are idle',
+    'srv update_slots: run slots completed',
+    'srv update_slots: update slots',
+  ]
+
+  if (!isError && routinePatterns.some(pattern => lower.includes(pattern))) {
+    return null
+  }
+
+  if (lower.includes('http: streamed chunk: data:')) {
+    if (lower.includes('[done]')) {
+      return 'stream chunk: [DONE]'
+    }
+    return null
+  }
+
+  if (!isError && (
+    lower.startsWith('parsed message:') ||
+    lower.startsWith('parsed chat message:') ||
+    lower.startsWith('response:') ||
+    lower.startsWith('assistant:') ||
+    lower.startsWith('prompt:') ||
+    text.includes('"prompt":') ||
+    text.includes('<|im_start|>') ||
+    text.includes('<!DOCTYPE html')
+  )) {
+    return null
+  }
+
+  if (text.length > 420) {
+    return `${text.slice(0, 260)} ... [truncated ${text.length - 260} chars]`
+  }
+
+  return text
+}
+
 function addLog(source, chunk) {
   const text = stripAnsi(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk))
   const entries = text
     .replace(/\r\n/g, '\n')
     .split('\n')
     .filter(line => line.trim().length > 0)
-    .map(line => ({
-      at: new Date().toISOString(),
-      source,
-      line,
-    }))
+    .map(line => compactLogLine(source, line))
+    .filter(Boolean)
+    .map(line => ({ at: new Date().toISOString(), source, line }))
 
   if (entries.length === 0) {
     return
@@ -268,12 +314,17 @@ function normalizeConfig(values, state = {}) {
     ctx_size: toNumber(merged.ctx_size, base.ctx_size),
     n_predict: toNumber(merged.n_predict, base.n_predict),
     n_gpu_layers: toNumber(merged.n_gpu_layers, base.n_gpu_layers),
+    request_timeout_ms: toNumber(merged.request_timeout_ms, base.request_timeout_ms),
     temp: toNumber(merged.temp, base.temp),
     top_k: toNumber(merged.top_k, base.top_k),
     top_p: toNumber(merged.top_p, base.top_p),
     min_p: toNumber(merged.min_p, base.min_p),
     presence_penalty: toNumber(merged.presence_penalty, base.presence_penalty),
     log_verbosity: toNumber(merged.log_verbosity, base.log_verbosity),
+    extra_args: String(merged.extra_args || ''),
+    show_thinking: merged.show_thinking !== false,
+    expand_thinking: Boolean(merged.expand_thinking),
+    show_raw_output: Boolean(merged.show_raw_output),
     verbose: Boolean(merged.verbose),
     webui: Boolean(merged.webui),
     embeddings: Boolean(merged.embeddings),
@@ -324,6 +375,7 @@ function buildToml(config) {
     `ctx_size = ${config.ctx_size}`,
     `n_predict = ${config.n_predict}`,
     `n_gpu_layers = ${config.n_gpu_layers}`,
+    `request_timeout_ms = ${config.request_timeout_ms}`,
     '',
     '# 对话模板参数',
     `chat_template_kwargs = ${tomlString(config.chat_template_kwargs)}`,
@@ -386,6 +438,12 @@ function buildToml(config) {
     `webui = ${config.webui ? 'true' : 'false'}`,
     `embeddings = ${config.embeddings ? 'true' : 'false'}`,
     `continuous_batching = ${config.continuous_batching ? 'true' : 'false'}`,
+    '',
+    '# 额外 llama-server 参数，会追加到最终启动命令末尾',
+    `extra_args = ${tomlString(config.extra_args)}`,
+    `show_thinking = ${config.show_thinking ? 'true' : 'false'}`,
+    `expand_thinking = ${config.expand_thinking ? 'true' : 'false'}`,
+    `show_raw_output = ${config.show_raw_output ? 'true' : 'false'}`,
     '',
   )
 
@@ -458,6 +516,48 @@ function hasValue(value) {
   return value !== undefined && value !== null && String(value).trim() !== ''
 }
 
+function splitExtraArgs(raw) {
+  const text = String(raw || '').replace(/\r?\n/g, ' ').trim()
+  if (!text) {
+    return []
+  }
+
+  const args = []
+  let current = ''
+  let quote = ''
+
+  for (const char of text) {
+    if (quote) {
+      if (char === quote) {
+        quote = ''
+      } else {
+        current += char
+      }
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        args.push(current)
+        current = ''
+      }
+      continue
+    }
+    current += char
+  }
+
+  if (quote) {
+    throw new Error('自定义附加参数里有未闭合的引号')
+  }
+  if (current) {
+    args.push(current)
+  }
+  return args
+}
+
 function pushArg(args, flag, value) {
   if (hasValue(value)) {
     args.push(flag, String(value))
@@ -473,7 +573,7 @@ function buildServerArgs(config) {
   pushArg(args, '--ctx-size', config.ctx_size)
   pushArg(args, '--n-predict', config.n_predict)
   pushArg(args, '--n-gpu-layers', config.n_gpu_layers)
-  pushArg(args, '--chat-template-kwargs', config.chat_template_kwargs)
+  pushArg(args, '--chat-template-kwargs', normalizeChatTemplateKwargsText(config.chat_template_kwargs))
   pushArg(args, '--temp', config.temp)
   pushArg(args, '--top-k', config.top_k)
   pushArg(args, '--top-p', config.top_p)
@@ -496,8 +596,172 @@ function buildServerArgs(config) {
   args.push(config.webui ? '--webui' : '--no-webui')
   if (config.embeddings) args.push('--embeddings')
   args.push(config.continuous_batching ? '--cont-batching' : '--no-cont-batching')
+  args.push(...splitExtraArgs(config.extra_args))
 
   return args
+}
+
+function quoteCommandPart(value) {
+  const text = String(value || '')
+  if (!text) {
+    return '""'
+  }
+  return /[\s"]/u.test(text) ? `"${text.replace(/"/g, '\\"')}"` : text
+}
+
+function buildLaunchDetails(config) {
+  const directMode = config.launch_mode !== 'launcher'
+  const command = directMode ? config.llama_server_path : config.launcher_path
+  try {
+    const args = directMode ? buildServerArgs(config) : []
+    return {
+      mode: directMode ? 'direct' : 'launcher',
+      command,
+      args,
+      cwd: directMode ? path.dirname(config.llama_server_path) : path.dirname(config.config_path),
+      preview: [command, ...args].map(quoteCommandPart).join(' '),
+      error: '',
+    }
+  } catch (error) {
+    return {
+      mode: directMode ? 'direct' : 'launcher',
+      command,
+      args: [],
+      cwd: directMode ? path.dirname(config.llama_server_path) : path.dirname(config.config_path),
+      preview: quoteCommandPart(command),
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+function stripWrappingQuotes(text) {
+  const value = String(text || '').trim()
+  if (value.length >= 2) {
+    const first = value[0]
+    const last = value[value.length - 1]
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return value.slice(1, -1).trim()
+    }
+  }
+  return value
+}
+
+function normalizeChatTemplateKwargsText(raw) {
+  let text = stripWrappingQuotes(raw)
+  if (!text) {
+    return ''
+  }
+  text = text.replace(/^--chat-template-kwargs\s+/i, '').trim()
+  text = stripWrappingQuotes(text)
+  if (text.includes('\\"')) {
+    text = text.replace(/\\"/g, '"')
+  }
+  return text
+}
+
+function parseChatTemplateKwargs(raw) {
+  const text = String(raw || '').trim()
+  if (!text) {
+    return null
+  }
+  const normalized = normalizeChatTemplateKwargsText(text)
+  let parsed
+  try {
+    parsed = JSON.parse(normalized)
+  } catch (error) {
+    throw new Error(`Chat Template Kwargs must be valid JSON: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Chat Template Kwargs must be a JSON object, for example {"enable_thinking": false}')
+  }
+  return parsed
+}
+
+function requestTimeoutSignal(config) {
+  const ms = Math.max(30000, toNumber(config.request_timeout_ms, 600000))
+  return AbortSignal.timeout(ms)
+}
+
+function messageTextContent(content) {
+  if (Array.isArray(content)) {
+    return content
+      .filter(item => item && item.type === 'text')
+      .map(item => String(item.text || '').trim())
+      .filter(Boolean)
+      .join('\n\n')
+  }
+  return String(content || '').trim()
+}
+
+function prepareChatMessages(rawMessages) {
+  const systemTexts = []
+  const messages = []
+
+  for (const message of Array.isArray(rawMessages) ? rawMessages : []) {
+    if (!message || message.localOnly) continue
+    if (!['user', 'assistant', 'system'].includes(message.role)) continue
+
+    const text = String(message.content || '')
+    const attachments = Array.isArray(message.attachments) ? message.attachments : []
+    const textBlocks = attachments
+      .filter(item => item.kind === 'text' && item.text)
+      .map(item => `\n\n--- Attachment: ${item.name} ---\n${item.text}`)
+    const fileBlocks = attachments
+      .filter(item => item.kind !== 'text' && item.kind !== 'image')
+      .map(item => `\n\n[Attachment: ${item.name}; ${item.mime || 'file'}; path: ${item.path}]`)
+    const imageAttachments = attachments.filter(item => item.kind === 'image' && item.dataUrl)
+    const mergedText = `${text}${textBlocks.join('')}${fileBlocks.join('')}`.trim()
+
+    let next
+    if (imageAttachments.length > 0) {
+      next = {
+        role: message.role,
+        content: [
+          {
+            type: 'text',
+            text: mergedText || 'Please analyze these images.',
+          },
+          ...imageAttachments.map(item => ({
+            type: 'image_url',
+            image_url: { url: item.dataUrl },
+          })),
+        ],
+      }
+    } else {
+      next = {
+        role: message.role,
+        content: mergedText,
+      }
+    }
+
+    if (!Array.isArray(next.content) && !String(next.content || '').trim()) continue
+    if (message.role === 'system') {
+      const systemText = messageTextContent(next.content)
+      if (systemText) systemTexts.push(systemText)
+      continue
+    }
+    messages.push(next)
+  }
+
+  return systemTexts.length
+    ? [{ role: 'system', content: systemTexts.join('\n\n') }, ...messages]
+    : messages
+}
+
+function buildChatRequestBody(config, messages, stream) {
+  const body = {
+    model: path.basename(config.model || 'local-model'),
+    messages,
+    temperature: toNumber(config.temp, 0.8),
+    top_p: toNumber(config.top_p, 0.95),
+    max_tokens: config.n_predict === -1 ? undefined : toNumber(config.n_predict, undefined),
+    stream,
+  }
+  const templateKwargs = parseChatTemplateKwargs(config.chat_template_kwargs)
+  if (templateKwargs) {
+    body.chat_template_kwargs = templateKwargs
+  }
+  return body
 }
 
 function validation(config) {
@@ -611,6 +875,7 @@ async function appState() {
     status: runtimeStatus,
     logs,
     validation: validation(config),
+    launch: buildLaunchDetails(config),
   }
 }
 
@@ -762,6 +1027,7 @@ function registerIpc() {
       validation: validation(config),
       status: runtimeStatus,
       logs,
+      launch: buildLaunchDetails(config),
     }
   })
 
@@ -781,6 +1047,10 @@ function registerIpc() {
     if (!existsSync(config.model)) {
       throw new Error(`找不到模型文件：${config.model}`)
     }
+    const launch = buildLaunchDetails(config)
+    if (launch.error) {
+      throw new Error(launch.error)
+    }
 
     logs = []
     stoppingServer = false
@@ -792,13 +1062,15 @@ function registerIpc() {
       startedAt: new Date().toISOString(),
     })
     const serverDir = path.dirname(config.llama_server_path)
-    const command = directMode ? config.llama_server_path : config.launcher_path
-    const args = directMode ? buildServerArgs(config) : []
-    const cwd = directMode ? serverDir : path.dirname(config.config_path)
+    const command = launch.command
+    const args = launch.args
+    const cwd = launch.cwd
     addLog('desktop', `启动方式：${directMode ? 'direct llama-server.exe' : 'launcher'}`)
     addLog('desktop', `llama-server：${config.llama_server_path}`)
     if (directMode) {
       addLog('desktop', `参数：${args.join(' ')}`)
+      addLog('desktop', `完整命令：${launch.preview}`)
+      addLog('desktop', `关键参数：ctx=${config.ctx_size}, gpu_layers=${config.n_gpu_layers}, batch=${config.batch_size || 'auto'}, ubatch=${config.ubatch_size || 'auto'}, threads=${config.threads || 'auto'}`)
     }
     addLog('desktop', `启动器：${config.launcher_path}`)
     addLog('desktop', `配置：${config.config_path}`)
@@ -964,9 +1236,10 @@ function registerIpc() {
         temperature: toNumber(config.temp, 0.8),
         top_p: toNumber(config.top_p, 0.95),
         max_tokens: config.n_predict === -1 ? undefined : toNumber(config.n_predict, undefined),
+        chat_template_kwargs: parseChatTemplateKwargs(config.chat_template_kwargs) || undefined,
         stream: false,
       }),
-      signal: AbortSignal.timeout(180000),
+      signal: requestTimeoutSignal(config),
     })
 
     if (!response.ok) {
@@ -1043,9 +1316,10 @@ function registerIpc() {
           temperature: toNumber(config.temp, 0.8),
           top_p: toNumber(config.top_p, 0.95),
           max_tokens: config.n_predict === -1 ? undefined : toNumber(config.n_predict, undefined),
+          chat_template_kwargs: parseChatTemplateKwargs(config.chat_template_kwargs) || undefined,
           stream: true,
         }),
-        signal: AbortSignal.timeout(180000),
+        signal: requestTimeoutSignal(config),
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

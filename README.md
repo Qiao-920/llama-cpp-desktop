@@ -63,6 +63,16 @@ npm run dist
 
 打包产物会生成在 `dist/`，该目录不会提交到 Git。
 
+## 当前限制 / Roadmap
+
+- 当前主要面向 Windows 10 / 11。Ubuntu、macOS 等跨平台版本需要继续适配路径、进程管理、托盘和打包配置。
+- 项目不内置 llama.cpp、模型文件、显卡驱动或 CUDA / Vulkan 运行库，需要用户本机已有可用环境。
+- 图片入口可以预览并发送图片，但真正理解图片需要视觉模型和对应的 `mmproj` 多模态投影文件。
+- 普通文本模型不能因为上传了图片就自动具备看图能力；视频理解当前暂未支持。
+- ngram、多 GPU、speculative decoding 等高级能力可以先通过“自定义附加参数”传给本机 `llama-server`，具体是否生效取决于本地 llama.cpp 版本。
+- 如果桌面端速度和原生命令行差异明显，请先复制“最终启动命令”，对比 GPU layers、上下文、batch、ubatch、threads 等参数。
+- Qwen 等 thinking 模型是否输出 `<think>` 内容取决于模型、模板和 `chat_template_kwargs`；桌面端会解析并折叠展示返回中的 `<think>...</think>`。
+
 ## 项目结构
 
 ```text

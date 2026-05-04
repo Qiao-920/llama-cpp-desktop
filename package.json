@@ -1,6 +1,6 @@
 {
   "name": "llama-cpp-desktop",
-  "version": "0.6.12",
+  "version": "0.6.13",
   "description": "A Windows desktop control panel for running and chatting with a local llama.cpp server.",
   "author": "",
   "license": "MIT",

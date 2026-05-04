@@ -26,6 +26,7 @@ const state = {
   active: 'chat',
   config: null,
   validation: {},
+  launch: {},
   status: { state: 'stopped', message: '服务未启动', url: 'http://127.0.0.1:8080' },
   logs: [],
   view: 'chat',
@@ -40,6 +41,7 @@ const state = {
   chatInput: '',
   attachments: [],
   attachmentMenuOpen: false,
+  attachmentMenuPosition: null,
   streamRequestId: '',
   preview: null,
   modelInfo: null,
@@ -348,7 +350,7 @@ function renderCodeAwareText(text, messageIndex, counter) {
       counter.value += 1
       const language = part.language || 'text'
       const previewable = canPreviewCode(language, part.value)
-      const codeValue = String(part.value || '').replace(/^\n+|\n+$/g, '')
+      const codeValue = String(part.value || '').replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, '')
       return `
         <figure class="code-block" data-code-index="${codeIndex}">
           <figcaption>
@@ -365,33 +367,92 @@ function renderCodeAwareText(text, messageIndex, counter) {
     .join('')
 }
 
+function splitThinkingOutput(content) {
+  const text = String(content || '')
+  const tagPattern = /<think(?:ing)?>/i
+  const closePattern = /<\/think(?:ing)?>/i
+  const labelPattern = /(?:^|\n)\s*(?:Thinking Process|思考过程)\s*[:：]/i
+  const openTag = tagPattern.exec(text)
+  const openLabel = labelPattern.exec(text)
+  const openCandidates = [openTag, openLabel].filter(Boolean)
+  const firstOpen = openCandidates.sort((a, b) => a.index - b.index)[0]
+  const closeTag = closePattern.exec(text)
+  const cleanMarkers = value => String(value || '')
+    .replace(/<\/?think(?:ing)?>/gi, '')
+    .replace(/^\s*(?:Thinking Process|思考过程)\s*[:：]\s*/i, '')
+    .trim()
+
+  if (firstOpen) {
+    const openEnd = firstOpen.index + firstOpen[0].length
+    const prefix = text.slice(0, firstOpen.index)
+    const closeAfterOpen = closePattern.exec(text.slice(openEnd))
+    if (closeAfterOpen) {
+      const closeStart = openEnd + closeAfterOpen.index
+      const closeEnd = closeStart + closeAfterOpen[0].length
+      const prefixLooksLikeThinking = !prefix.trim() || /(?:reasoning|thinking|思考|推理)/i.test(prefix)
+      const answerPrefix = prefixLooksLikeThinking ? '' : prefix
+      const thoughtPrefix = prefixLooksLikeThinking ? prefix : ''
+      return {
+        answer: cleanMarkers(`${answerPrefix}${text.slice(closeEnd)}`),
+        thoughts: [cleanMarkers(`${thoughtPrefix}${text.slice(openEnd, closeStart)}`)].filter(Boolean),
+      }
+    }
+
+    return {
+      answer: cleanMarkers(prefix),
+      thoughts: [cleanMarkers(text.slice(openEnd))].filter(Boolean),
+    }
+  }
+
+  if (closeTag) {
+    const closeEnd = closeTag.index + closeTag[0].length
+    return {
+      answer: cleanMarkers(text.slice(closeEnd)),
+      thoughts: [cleanMarkers(text.slice(0, closeTag.index))].filter(Boolean),
+    }
+  }
+
+  return { answer: text, thoughts: [] }
+}
+
 function renderMessageContent(message, messageIndex) {
   const content = String(message.content || '')
   if (!content && message.role === 'assistant' && state.chatBusy) {
     return '<div class="typing-line">正在生成...</div>'
   }
+  if (message.role !== 'assistant') {
+    return content ? renderTextBlock(content) : ''
+  }
 
   const counter = { value: 0 }
   const output = []
-  const thinkPattern = /<think>([\s\S]*?)(<\/think>|$)/gi
-  let cursor = 0
-  let match
+  const { answer, thoughts } = splitThinkingOutput(content)
+  const showRawOutput = Boolean(state.config?.show_raw_output)
+  const showThinking = state.config?.show_thinking !== false && !showRawOutput
+  const expandThinking = Boolean(state.config?.expand_thinking)
 
-  while ((match = thinkPattern.exec(content)) !== null) {
-    if (match.index > cursor) {
-      output.push(renderCodeAwareText(content.slice(cursor, match.index), messageIndex, counter))
-    }
+  if (showThinking && thoughts.length > 0) {
     output.push(`
-      <details class="think-block" open>
+      <details class="think-block" ${expandThinking ? 'open' : ''}>
         <summary>思考过程</summary>
-        ${renderCodeAwareText(match[1] || '', messageIndex, counter)}
+        ${renderCodeAwareText(thoughts.join('\n\n'), messageIndex, counter)}
       </details>
     `)
-    cursor = match.index + match[0].length
+  } else if (!showRawOutput && thoughts.length > 0 && state.config?.show_thinking === false) {
+    output.push('<div class="markdown-text muted-note">思考过程已隐藏。</div>')
   }
 
-  if (cursor < content.length) {
-    output.push(renderCodeAwareText(content.slice(cursor), messageIndex, counter))
+  if (answer) {
+    output.push(renderCodeAwareText(answer, messageIndex, counter))
+  }
+
+  if (showRawOutput && content) {
+    output.push(`
+      <details class="raw-output-block" ${message.streaming ? 'open' : ''}>
+        <summary>原始输出</summary>
+        <pre>${escapeHtml(content)}</pre>
+      </details>
+    `)
   }
 
   return output.join('') || renderTextBlock(content)
@@ -404,6 +465,25 @@ function getCodeBlock(messageIndex, codeIndex) {
   return blocks[Number(codeIndex)] || null
 }
 
+function scrollOpenRawOutputs(root = document) {
+  const sync = () => {
+    root.querySelectorAll?.('.raw-output-block[open] pre').forEach(pre => {
+      pre.scrollTop = pre.scrollHeight
+    })
+  }
+  sync()
+  window.requestAnimationFrame(sync)
+}
+
+function stickStreamingMessage(article, feed) {
+  const sync = () => {
+    scrollOpenRawOutputs(article)
+    if (feed) feed.scrollTop = feed.scrollHeight
+  }
+  sync()
+  window.requestAnimationFrame(sync)
+}
+
 function updateMessageDom(index) {
   const feed = document.getElementById('chatFeed')
   const shouldStick = isNearBottom(feed)
@@ -413,9 +493,11 @@ function updateMessageDom(index) {
   const meta = article?.querySelector('.message-meta')
   if (!message || !bubble) return
   updateLiveStats(message)
-  bubble.innerHTML = `${renderMessageContent(message, index)}${renderAttachmentChips(message.attachments || [], false)}`
+  bubble.innerHTML = renderMessageContent(message, index)
   if (meta) meta.outerHTML = renderMessageMeta(message)
-  if (shouldStick && feed) {
+  if (message.streaming) {
+    stickStreamingMessage(article, feed)
+  } else if (shouldStick && feed) {
     feed.scrollTop = feed.scrollHeight
   }
 }
@@ -440,6 +522,34 @@ function statusClass() {
   if (state.status.state === 'error') return 'error'
   if (state.status.state === 'starting' || state.status.state === 'stopping') return 'pending'
   return ''
+}
+
+function compactStatusMessage(message) {
+  const text = String(message || '')
+  if (text.includes('System message must be at the beginning')) {
+    return '系统消息位置错误：已在新版中自动合并到请求最前面。'
+  }
+  if (/timeout|aborted/i.test(text)) {
+    return '请求超时：可在设置里调大“请求超时 ms”，或降低上下文/输出长度。'
+  }
+  if (text.length > 180) {
+    return `${text.slice(0, 180)}...`
+  }
+  return text
+}
+
+function friendlyErrorMessage(error) {
+  const text = String(error?.message || error || '')
+  if (text.includes('System message must be at the beginning')) {
+    return '发送失败：系统消息必须位于请求最前面。新版会自动整理历史消息，请再发送一次。'
+  }
+  if (/timeout|aborted/i.test(text)) {
+    return '发送失败：请求超时。可以在设置里调大“请求超时 ms”，或降低 ctx_size / n_predict 后重试。'
+  }
+  if (text.includes('Chat Template Kwargs must be valid JSON')) {
+    return `发送失败：Chat Template Kwargs 不是合法 JSON。${text}`
+  }
+  return text.length > 360 ? `发送失败：${text.slice(0, 360)}...` : `发送失败：${text}`
 }
 
 function shortTime(value) {
@@ -496,6 +606,30 @@ function saveCurrentSession() {
   persistSessions()
 }
 
+function buildApiMessages(messages) {
+  const systemMessages = []
+  const conversation = []
+
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (!message || message.localOnly) continue
+    if (!['user', 'assistant', 'system'].includes(message.role)) continue
+    if (!String(message.content || '').trim() && !(Array.isArray(message.attachments) && message.attachments.length)) continue
+
+    if (message.role === 'system') {
+      const systemText = String(message.content || '').trim()
+      if (/^(发送失败|重试失败|请求失败|启动失败)[：:]/.test(systemText)) continue
+      systemMessages.push(systemText)
+      continue
+    }
+
+    conversation.push(message)
+  }
+
+  return systemMessages.length
+    ? [{ role: 'system', content: systemMessages.filter(Boolean).join('\n\n') }, ...conversation]
+    : conversation
+}
+
 function openSession(sessionId) {
   saveCurrentSession()
   const session = state.sessions.find(item => item.id === sessionId)
@@ -531,25 +665,36 @@ function attachmentLabel(kind) {
     system: '系统',
     mcp: 'MCP',
     file: '文件',
+    video: '视频',
   }[kind] || '文件'
 }
 
-function renderAttachmentItem(item, index, removable) {
+function renderAttachmentItem(item, index, removable, mode = 'composer') {
   const kind = String(item?.kind || 'file')
   const name = String(item?.name || 'attachment')
+  const meta = [formatBytes(item.size || 0), item.warning || item.error || ''].filter(Boolean).join(' · ')
+  const title = [name, item.path || '', meta].filter(Boolean).join('\n')
   const removeButton = removable
     ? `<button type="button" class="attachment-remove" data-action="remove-attachment" data-index="${index}" title="移除附件">×</button>`
     : ''
 
   if (kind === 'image' && item?.dataUrl) {
+    if (mode === 'message-user') {
+      return `
+        <button type="button" class="chat-image-attachment" data-action="preview-image" data-src="${escapeAttribute(item.dataUrl)}" data-title="${escapeAttribute(name)}" title="${escapeAttribute(title)}">
+          <img src="${escapeAttribute(item.dataUrl)}" alt="${escapeAttribute(name)}" loading="lazy" />
+        </button>
+      `
+    }
+
     return `
-      <figure class="attachment-card image ${removable ? 'editable' : 'readonly'}">
+      <figure class="attachment-card image ${removable ? 'editable' : 'readonly'}" title="${escapeAttribute(title)}">
         <button type="button" class="attachment-image-trigger" data-action="preview-image" data-src="${escapeAttribute(item.dataUrl)}" data-title="${escapeAttribute(name)}" title="预览图片">
           <img src="${escapeAttribute(item.dataUrl)}" alt="${escapeAttribute(name)}" loading="lazy" />
         </button>
         <figcaption>
           <strong>${escapeHtml(name)}</strong>
-          <span>${escapeHtml(formatBytes(item.size || 0))}</span>
+          <span>${escapeHtml(meta)}</span>
         </figcaption>
         ${removeButton}
       </figure>
@@ -557,9 +702,10 @@ function renderAttachmentItem(item, index, removable) {
   }
 
   return `
-    <span class="attachment-chip ${escapeHtml(kind)}">
+    <span class="attachment-chip ${escapeHtml(kind)} ${mode === 'message-user' ? 'message-file' : ''}" title="${escapeAttribute(title)}">
       <strong>${attachmentLabel(kind)}</strong>
-      ${escapeHtml(name)}
+      <span class="attachment-name">${escapeHtml(name)}</span>
+      <span class="attachment-size">${escapeHtml(formatBytes(item.size || 0))}</span>
       ${removeButton}
     </span>
   `
@@ -593,13 +739,77 @@ function renderMessageMeta(message) {
   return pieces.length ? `<div class="message-meta">${pieces.join('')}</div>` : ''
 }
 
+function compactLogLineForDisplay(line) {
+  const text = String(line || '').trim()
+  const lower = text.toLowerCase()
+  const routinePatterns = [
+    'que start_loop: waiting for new tasks',
+    'que start_loop: processing new tasks',
+    'srv update_slots: all slots are idle',
+    'srv update_slots: run slots completed',
+    'srv update_slots: update slots',
+  ]
+
+  if (routinePatterns.some(pattern => lower.includes(pattern))) return ''
+  if (lower.includes('http: streamed chunk: data:') && !lower.includes('[done]')) return ''
+  if (lower.includes('http: streamed chunk: data: [done]')) return 'stream chunk: [DONE]'
+  if (text.includes('"prompt":') || text.includes('<|im_start|>') || text.includes('<!DOCTYPE html')) {
+    return `[已省略超长日志负载：${text.length} 字符]`
+  }
+  if (text.length > 420) return `${text.slice(0, 260)} ... [已截断 ${text.length - 260} 字符]`
+  return text
+}
+
+function visibleLogs(limit = 420) {
+  return (state.logs || [])
+    .map(entry => ({ ...entry, line: compactLogLineForDisplay(entry.line) }))
+    .filter(entry => entry.line)
+    .slice(-limit)
+}
+
+function terminalLineForDisplay(entry) {
+  const line = compactLogLineForDisplay(entry?.line)
+  if (!line) return ''
+
+  const source = String(entry?.source || '').toLowerCase()
+  const lower = line.toLowerCase()
+  const runtimePrefix = /^(llama_|load_|clip_|common_|sched_|ggml|cuda|cublas|main:|server|srv\b|srv_|slot|system_info|webui|error|warn|warning|fatal)/i
+
+  if (source === 'chat') return ''
+  if (lower.includes('parsed message:')) return ''
+  if (lower.includes('"role":"assistant"') || lower.includes('"role":"user"')) return ''
+  if (line.includes('<|im_start|>') || line.includes('<!DOCTYPE html')) return ''
+  if (runtimePrefix.test(line)) return line
+  if (lower.includes('server is listening') || lower.includes('listening on') || lower.includes('model loaded')) return line
+  if (source === 'desktop' && !lower.includes('prompt')) return line
+
+  return ''
+}
+
+function visibleTerminalLogs(limit = 520) {
+  return (state.logs || [])
+    .map(entry => terminalLineForDisplay(entry))
+    .filter(Boolean)
+    .slice(-limit)
+}
+
+function renderLogRow(entry, className = 'terminal-row') {
+  return `
+    <div class="${className}">
+      <span>${escapeHtml(shortTime(entry.at))}</span>
+      <strong>${escapeHtml(entry.source || 'log')}</strong>
+      <em>${escapeHtml(entry.line || '')}</em>
+    </div>
+  `
+}
+
 function renderSidebarLogs() {
-  if (!state.logs.length) {
+  const logs = visibleLogs(80)
+  if (!logs.length) {
     return '<div class="terminal-empty">还没有终端日志。启动服务后，这里会实时出现 llama.cpp 输出。</div>'
   }
 
-  return state.logs
-    .slice(-80)
+  return logs
     .reverse()
     .map(entry => `
       <button type="button" class="terminal-item" data-action="open-log-settings">
@@ -732,30 +942,25 @@ function renderSidebar() {
   `
 }
 
-function renderAttachmentChips(attachments, removable) {
+function renderAttachmentChips(attachments, removable, role = 'composer') {
   if (!attachments || attachments.length === 0) {
     return ''
   }
+  const mode = role === 'user' ? 'message-user' : removable ? 'composer' : 'message'
 
   return `
-    <div class="attachment-row">
-      ${attachments.map((item, index) => renderAttachmentItem(item, index, removable)).join('')}
+    <div class="attachment-row ${role === 'user' ? 'message-attachment-row' : ''}">
+      ${attachments.map((item, index) => renderAttachmentItem(item, index, removable, mode)).join('')}
     </div>
   `
 }
 
 function renderTerminalPanel() {
-  const logRows = state.logs.length
-    ? state.logs
-        .map(entry => `
-          <div class="terminal-row">
-            <span>${escapeHtml(shortTime(entry.at))}</span>
-            <strong>${escapeHtml(entry.source || 'log')}</strong>
-            <em>${escapeHtml(entry.line || '')}</em>
-          </div>
-        `)
-        .join('')
-    : '<div class="empty-log">还没有终端日志。启动服务后，llama.cpp 的 stdout/stderr 会显示在这里。</div>'
+  const logs = visibleTerminalLogs()
+  const hiddenCount = Math.max(0, (state.logs || []).length - logs.length)
+  const logRows = logs.length
+    ? logs.map(line => `<div class="terminal-line">${escapeHtml(line)}</div>`).join('')
+    : '<div class="terminal-line terminal-muted">Waiting for llama.cpp server output...</div>'
 
   return `
     <section class="terminal-screen">
@@ -765,6 +970,10 @@ function renderTerminalPanel() {
           <strong>llama.cpp server output</strong>
         </div>
         <button type="button" class="outline-btn" data-action="return-chat">回到聊天</button>
+      </div>
+      <div class="terminal-summary">
+        <span>正常终端视图：只显示 llama.cpp/server/runtime 输出。</span>
+        ${hiddenCount ? `<strong>已隐藏 ${hiddenCount} 条聊天回显、JSON chunk、prompt 或轮询日志。</strong>` : ''}
       </div>
       <div class="terminal-console" id="inlineLogBox">${logRows}</div>
     </section>
@@ -845,31 +1054,34 @@ function renderModelInfoModal() {
     : info.error
       ? `<div class="model-info-empty error">${escapeHtml(info.error)}</div>`
       : `
-        <div class="model-info-grid">
-          ${rows
-            .map(row => `
-              <div class="model-info-row">
-                <span>${escapeHtml(row.label)}</span>
-                <strong title="${escapeAttribute(row.value)}">${escapeHtml(row.value)}</strong>
-                ${row.copy ? `<button type="button" class="icon-copy-btn" data-action="copy-model-info" data-copy="${escapeAttribute(row.copy)}" title="复制">${renderCopyIcon()}</button>` : '<div></div>'}
-              </div>
-            `)
-            .join('')}
-        </div>
-        <div class="model-template-card">
-          <div class="model-template-head">
-            <span>本地运行参数（桌面端）</span>
+        <div class="model-info-columns">
+          <div class="model-info-card">
+            <div class="model-template-head compact-head"><span>模型信息</span></div>
+            <div class="model-info-grid">
+              ${rows
+                .map(row => `
+                  <div class="model-info-row">
+                    <span>${escapeHtml(row.label)}</span>
+                    <strong title="${escapeAttribute(row.value)}">${escapeHtml(row.value)}</strong>
+                    ${row.copy ? `<button type="button" class="icon-copy-btn" data-action="copy-model-info" data-copy="${escapeAttribute(row.copy)}" title="复制">${renderCopyIcon()}</button>` : '<div></div>'}
+                  </div>
+                `)
+                .join('')}
+            </div>
           </div>
-          <div class="model-info-grid slim">
-            ${runtimeRows
-              .map(row => `
-                <div class="model-info-row">
-                  <span>${escapeHtml(row.label)}</span>
-                  <strong title="${escapeAttribute(row.value)}">${escapeHtml(row.value)}</strong>
-                  ${row.copy ? `<button type="button" class="icon-copy-btn" data-action="copy-model-info" data-copy="${escapeAttribute(row.copy)}" title="复制">${renderCopyIcon()}</button>` : '<div></div>'}
-                </div>
-              `)
-              .join('')}
+          <div class="model-info-card">
+            <div class="model-template-head compact-head"><span>本地运行参数</span></div>
+            <div class="model-info-grid">
+              ${runtimeRows
+                .map(row => `
+                  <div class="model-info-row">
+                    <span>${escapeHtml(row.label)}</span>
+                    <strong title="${escapeAttribute(row.value)}">${escapeHtml(row.value)}</strong>
+                    ${row.copy ? `<button type="button" class="icon-copy-btn" data-action="copy-model-info" data-copy="${escapeAttribute(row.copy)}" title="复制">${renderCopyIcon()}</button>` : '<div></div>'}
+                  </div>
+                `)
+                .join('')}
+            </div>
           </div>
         </div>
         <div class="model-template-card">
@@ -899,19 +1111,32 @@ function renderModelInfoModal() {
 function renderChat() {
   const messages = state.chatMessages.length
     ? state.chatMessages
-        .map((message, index) => `
-          <article class="message ${escapeHtml(message.role)}" data-message-index="${index}">
-            <div class="avatar">${message.role === 'user' ? '你' : message.role === 'assistant' ? 'll' : 'sys'}</div>
-            <div class="message-body">
+        .map((message, index) => {
+          const content = renderMessageContent(message, index)
+          const attachments = renderAttachmentChips(message.attachments || [], false, message.role)
+          const body = message.role === 'user'
+            ? `
+              ${attachments}
+              ${content ? `<div class="bubble">${content}</div>` : ''}
+            `
+            : `
               <div class="bubble">
-                ${renderMessageContent(message, index)}
-                ${renderAttachmentChips(message.attachments || [], false)}
+                ${content}
               </div>
-              ${renderMessageMeta(message)}
-              ${renderMessageActions(index, message)}
-            </div>
-          </article>
-        `)
+              ${attachments}
+            `
+
+          return `
+            <article class="message ${escapeHtml(message.role)}" data-message-index="${index}">
+              <div class="avatar">${message.role === 'user' ? '你' : message.role === 'assistant' ? 'll' : 'sys'}</div>
+              <div class="message-body">
+                ${body}
+                ${renderMessageMeta(message)}
+                ${renderMessageActions(index, message)}
+              </div>
+            </article>
+          `
+        })
         .join('')
     : `
       <div class="empty-state">
@@ -924,26 +1149,10 @@ function renderChat() {
     <section class="chat-screen ${state.chatMessages.length ? '' : 'empty-chat'}">
       <div class="chat-feed" id="chatFeed">${messages}</div>
       <div class="composer-wrap">
-        ${renderAttachmentChips(state.attachments, true)}
+        ${renderAttachmentChips(state.attachments, true, 'composer')}
         <div class="composer">
           <div class="attach-wrap">
             <button class="round-btn" type="button" data-action="toggle-attachment-menu" title="添加内容">+</button>
-            ${state.attachmentMenuOpen ? `
-              <div class="attach-menu">
-                <button type="button" data-action="pick-image"><span class="menu-icon image"></span>图片</button>
-                <button type="button" data-action="pick-audio"><span class="menu-icon audio"></span>音频文件</button>
-                <button type="button" data-action="pick-text"><span class="menu-icon text"></span>文本文件</button>
-                <button type="button" data-action="pick-pdf"><span class="menu-icon pdf"></span>PDF 文件</button>
-                <button type="button" data-action="insert-system-message"><span class="menu-icon system"></span>系统消息</button>
-                <div class="attach-menu-split"></div>
-                <button type="button" class="mcp-menu-row" data-action="open-mcp-settings"><span class="menu-icon mcp"></span>MCP 服务器 <em>›</em></button>
-                <div class="mcp-submenu">
-                  <input placeholder="搜索服务器......" readonly />
-                  <p>未配置 MCP 服务器</p>
-                  <button type="button" data-action="open-mcp-settings">管理 MCP 服务器</button>
-                </div>
-              </div>
-            ` : ''}
           </div>
           <textarea data-chat-input spellcheck="false" placeholder="输入一条消息……">${escapeHtml(state.chatInput)}</textarea>
           <button class="model-chip model-trigger" type="button" data-action="open-model-info" title="${escapeHtml(state.config?.model || '')}">
@@ -958,6 +1167,49 @@ function renderChat() {
       </div>
     </section>
   `
+}
+
+function attachmentMenuItems() {
+  return `
+    <button type="button" data-action="pick-image"><span class="menu-icon image"></span>图片</button>
+    <button type="button" disabled title="暂不支持视频理解"><span class="menu-icon video"></span>视频文件</button>
+    <button type="button" data-action="pick-audio"><span class="menu-icon audio"></span>音频文件</button>
+    <button type="button" data-action="pick-text"><span class="menu-icon text"></span>文本文件</button>
+    <button type="button" data-action="pick-pdf"><span class="menu-icon pdf"></span>PDF 文件</button>
+    <button type="button" data-action="insert-system-message"><span class="menu-icon system"></span>系统消息</button>
+  `
+}
+
+function renderAttachmentMenuPortal() {
+  if (!state.attachmentMenuOpen) return ''
+  const fallback = { left: 0, top: 0 }
+  const position = state.attachmentMenuPosition || fallback
+  return `
+    <div class="attach-menu-backdrop" data-action="close-attachment-menu"></div>
+    <div class="attach-menu floating" style="left: ${Number(position.left) || 0}px; top: ${Number(position.top) || 0}px;">
+      ${attachmentMenuItems()}
+    </div>
+  `
+}
+
+function openAttachmentMenu(button) {
+  const rect = button.getBoundingClientRect()
+  const menuWidth = 206
+  const menuHeight = 252
+  const gap = 8
+  const minPad = 12
+  const left = Math.min(Math.max(rect.left, minPad), window.innerWidth - menuWidth - minPad)
+  const below = rect.bottom + gap
+  const above = rect.top - menuHeight - gap
+  const top = below + menuHeight < window.innerHeight - minPad
+    ? below
+    : Math.max(minPad, above)
+
+  state.attachmentMenuOpen = true
+  state.attachmentMenuPosition = {
+    left: Math.round(left),
+    top: Math.round(top),
+  }
 }
 
 function renderSettingsSection(id, content) {
@@ -1004,6 +1256,7 @@ function renderSettingsContent() {
         ${field('ctx_size', '上下文长度 ctx_size', { type: 'number', min: 1 })}
         ${field('n_predict', '输出长度 n_predict', { type: 'number' })}
         ${field('n_gpu_layers', 'GPU 层数 n_gpu_layers', { type: 'number' })}
+        ${field('request_timeout_ms', '请求超时 ms', { type: 'number', min: 30000 })}
         ${field('log_verbosity', '日志等级', { type: 'number' })}
       </div>
       <div class="switch-grid">
@@ -1046,13 +1299,8 @@ function renderSettingsContent() {
       <div class="settings-note">ANSI 颜色码会被过滤，方便直接看真正的 llama.cpp 输出。</div>
       <div class="log-box" id="logBox">
         ${
-          state.logs.length
-            ? state.logs
-                .map(entry => {
-                  const time = new Date(entry.at).toLocaleTimeString('zh-CN', { hour12: false })
-                  return `<div class="log-entry"><span>${escapeHtml(time)}</span><span>${escapeHtml(entry.source)}</span><strong>${escapeHtml(entry.line)}</strong></div>`
-                })
-                .join('')
+          visibleLogs().length
+            ? visibleLogs().map(entry => renderLogRow(entry, 'log-entry')).join('')
             : '<div class="empty-log">还没有日志。启动服务后会在这里显示。</div>'
         }
       </div>
@@ -1136,6 +1384,7 @@ function renderModernSettingsCard(title, text, body) {
 function renderModernSettingsContent() {
   const tab = currentSettingsTabId()
   const v = state.validation || {}
+  const launch = state.launch || {}
   const checks = `
     <div class="checks">
       <div><span>配置文件</span>${pill(v.configExists)}</div>
@@ -1168,6 +1417,14 @@ function renderModernSettingsContent() {
             ${field('ctx_size', '上下文大小 ctx_size', { type: 'number', min: 1 })}
             ${field('n_predict', '最大输出 n_predict', { type: 'number' })}
             ${field('n_gpu_layers', 'GPU 层数', { type: 'number' })}
+            ${field('request_timeout_ms', '请求超时 ms', { type: 'number', min: 30000 })}
+          </div>
+          <div class="settings-callout">32GB 内存建议先用 32768 或 65536 上下文。131072 这类超长上下文会显著增加 KV cache，占满内存是正常风险。</div>
+        `)}
+        ${renderModernSettingsCard('最终启动命令', '速度或参数不对时，先复制这里和原生命令行对比。', `
+          <div class="command-preview ${launch.error ? 'has-error' : ''}">
+            <pre>${escapeHtml(launch.error || launch.preview || '保存配置后会在这里生成完整命令。')}</pre>
+            <button type="button" class="outline-btn small-btn" data-action="copy-launch-command" ${launch.preview && !launch.error ? '' : 'disabled'}>复制命令</button>
           </div>
         `)}
       </div>
@@ -1190,11 +1447,15 @@ function renderModernSettingsContent() {
           <div class="form-grid single">
             ${field('model', '模型文件', { pick: 'gguf', hint: '例如 Qwen3.5-9B.Q4_K_M.gguf' })}
             ${field('mmproj', 'mmproj 投影文件', { pick: 'gguf', hint: '视觉或多模态模型才需要' })}
-            ${field('chat_template_kwargs', 'Chat Template Kwargs', { textarea: true, hint: '例如 {"enable_thinking": false}' })}
+            ${field('chat_template_kwargs', 'Chat Template Kwargs', { textarea: true, hint: '会同时作为启动参数和每次请求参数发送。可写 {"enable_thinking":false}，也兼容 --chat-template-kwargs \'{\\"enable_thinking\\":false}\'。支持的模型还可加 "thinking_budget": 0。' })}
           </div>
+          <div class="settings-callout">注意：这是控制模型是否生成思考；下面的“显示思考过程”只是控制桌面端是否把已返回的 <think> 展示出来。图片理解需要视觉模型和 mmproj。</div>
         `)}
         ${renderModernSettingsCard('展示开关', '把网页端常见的显示项集中到一起。', `
           <div class="switch-grid">
+            ${switchField('show_thinking', '显示思考过程', '解析模型返回的 <think> 区块。')}
+            ${switchField('expand_thinking', '默认展开思考', '关闭时会折叠成一行。')}
+            ${switchField('show_raw_output', '显示原始输出', '排查模板和思考模式时使用。')}
             ${switchField('webui', '保留 llama.cpp Web UI', '保留浏览器页入口，方便双开调试。')}
             ${switchField('verbose', '显示详细日志', '输出更多服务端信息，便于排查。')}
           </div>
@@ -1262,6 +1523,16 @@ function renderModernSettingsContent() {
             ${field('n_cpu_moe', 'n_cpu_moe', { type: 'number' })}
             ${field('log_verbosity', '日志等级', { type: 'number' })}
           </div>
+          <div class="settings-callout">多 GPU 取决于本地 llama.cpp 的编译版本和硬件环境。常见参数是 split-mode、tensor-split 和 main-gpu。</div>
+        `)}
+        ${renderModernSettingsCard('自定义附加参数', '临时放 ngram、多卡、speculative decoding 等高级参数。', `
+          <div class="form-grid single">
+            ${field('extra_args', '追加到 llama-server 的参数', { textarea: true, hint: '例如 --flash-attn --no-mmap。参数会追加到最终启动命令末尾，需要与你本机 llama.cpp 版本匹配。' })}
+          </div>
+          <div class="command-preview compact ${launch.error ? 'has-error' : ''}">
+            <pre>${escapeHtml(launch.error || launch.preview || '保存配置后会在这里生成完整命令。')}</pre>
+            <button type="button" class="outline-btn small-btn" data-action="copy-launch-command" ${launch.preview && !launch.error ? '' : 'disabled'}>复制命令</button>
+          </div>
         `)}
         ${renderModernSettingsCard('开发者开关', '保留性能和调试相关开关。', `
           <div class="switch-grid">
@@ -1278,13 +1549,8 @@ function renderModernSettingsContent() {
   return renderModernSettingsCard('日志', 'ANSI 颜色码已被过滤，方便直接看真正的 llama.cpp 输出。', `
     <div class="log-box" id="logBox">
       ${
-        state.logs.length
-          ? state.logs
-              .map(entry => {
-                const time = new Date(entry.at).toLocaleTimeString('zh-CN', { hour12: false })
-                return `<div class="log-entry"><span>${escapeHtml(time)}</span><span>${escapeHtml(entry.source)}</span><strong>${escapeHtml(entry.line)}</strong></div>`
-              })
-              .join('')
+        visibleLogs().length
+          ? visibleLogs().map(entry => renderLogRow(entry, 'log-entry')).join('')
           : '<div class="empty-log">还没有日志。启动服务后会在这里实时显示。</div>'
       }
     </div>
@@ -1364,7 +1630,7 @@ function render(options = {}) {
         <footer class="service-bar">
           <div class="service-left">
             <span class="status-dot ${statusClass()}"></span>
-            <span>${statusLabel()} · ${escapeHtml(state.status.message || '')}</span>
+            <span>${statusLabel()} · ${escapeHtml(compactStatusMessage(state.status.message || ''))}</span>
             <code>${escapeHtml(state.status.url || '')}</code>
           </div>
           <div class="service-actions">
@@ -1383,6 +1649,7 @@ function render(options = {}) {
     ${renderPreviewModal()}
     ${renderModelInfoModal()}
     ${renderHistoryDialog()}
+    ${renderAttachmentMenuPortal()}
     <div class="toast ${state.toast ? 'show' : ''}">${escapeHtml(state.toast)}</div>
   `
 
@@ -1395,6 +1662,7 @@ function render(options = {}) {
     } else if (shouldStick) {
       chatFeed.scrollTop = chatFeed.scrollHeight
     }
+    scrollOpenRawOutputs(chatFeed)
   }
   const logBox = document.getElementById('logBox')
   if (logBox) logBox.scrollTop = logBox.scrollHeight
@@ -1419,6 +1687,7 @@ function patchFromBackend(payload) {
   if (payload.validation) state.validation = payload.validation
   if (payload.status) state.status = payload.status
   if (payload.logs) state.logs = payload.logs
+  if (payload.launch) state.launch = payload.launch
   state.dirty = false
 }
 
@@ -1509,7 +1778,7 @@ async function openModelInfo() {
 
 async function sendChat() {
   const content = state.chatInput.trim()
-  if (!content || state.chatBusy) return
+  if ((!content && state.attachments.length === 0) || state.chatBusy) return
 
   if (!state.currentSessionId) state.currentSessionId = makeSessionId()
   const attachments = state.attachments
@@ -1541,9 +1810,7 @@ async function sendChat() {
     const result = await window.llamaDesktop.streamChat({
       requestId,
       config: state.config,
-      messages: state.chatMessages
-        .slice(0, -1)
-        .filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'system'),
+      messages: buildApiMessages(state.chatMessages.slice(0, -1)),
     })
     const latencyMs = Math.round(performance.now() - startedAt)
     const tokens = result.raw?.usage?.total_tokens || result.raw?.usage?.completion_tokens || ''
@@ -1564,7 +1831,7 @@ async function sendChat() {
     if (assistant?.role === 'assistant' && !assistant.content) {
       state.chatMessages.pop()
     }
-    state.chatMessages.push({ role: 'system', content: `发送失败：${error.message || String(error)}`, createdAt: Date.now() })
+    state.chatMessages.push({ role: 'system', content: friendlyErrorMessage(error), createdAt: Date.now(), localOnly: true })
     saveCurrentSession()
   } finally {
     state.chatBusy = false
@@ -1610,9 +1877,7 @@ async function retryMessage(index) {
     const result = await window.llamaDesktop.streamChat({
       requestId,
       config: state.config,
-      messages: state.chatMessages
-        .slice(0, -1)
-        .filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'system'),
+      messages: buildApiMessages(state.chatMessages.slice(0, -1)),
     })
     const latencyMs = Math.round(performance.now() - startedAt)
     const tokens = result.raw?.usage?.total_tokens || result.raw?.usage?.completion_tokens || ''
@@ -1633,7 +1898,7 @@ async function retryMessage(index) {
     if (assistant?.role === 'assistant' && !assistant.content) {
       state.chatMessages.pop()
     }
-    state.chatMessages.push({ role: 'system', content: `重试失败：${error.message || String(error)}`, createdAt: Date.now() })
+    state.chatMessages.push({ role: 'system', content: friendlyErrorMessage(error).replace(/^发送失败/, '重试失败'), createdAt: Date.now(), localOnly: true })
     saveCurrentSession()
   } finally {
     state.chatBusy = false
@@ -1675,9 +1940,19 @@ async function pickAttachment(kind) {
     if (picked?.length) {
       state.attachments = [...state.attachments, ...picked]
       state.attachmentMenuOpen = false
-      setToast(`${attachmentLabel(kind)}已添加`)
+      state.attachmentMenuPosition = null
+      const hasImage = picked.some(item => item.kind === 'image')
+      const hasLargeImage = picked.some(item => item.kind === 'image' && !item.dataUrl)
+      if (hasLargeImage) {
+        setToast('图片已添加，但文件较大，只会作为附件记录路径。')
+      } else if (hasImage && !state.config?.mmproj) {
+        setToast('图片已添加；未配置 mmproj 时，普通文本模型可能看不懂图片。')
+      } else {
+        setToast(`${attachmentLabel(kind)}已添加`)
+      }
     } else {
       state.attachmentMenuOpen = false
+      state.attachmentMenuPosition = null
       render()
     }
   } catch (error) {
@@ -1686,7 +1961,7 @@ async function pickAttachment(kind) {
 }
 
 appEl.addEventListener('click', event => {
-  const target = event.target.closest('button, .settings-backdrop, .preview-backdrop, .dialog-backdrop')
+  const target = event.target.closest('button, .settings-backdrop, .preview-backdrop, .dialog-backdrop, .attach-menu-backdrop')
   if (!target) return
 
   const seed = target.dataset.seed
@@ -1736,6 +2011,14 @@ appEl.addEventListener('click', event => {
   if (action === 'copy-model-info') {
     void navigator.clipboard.writeText(String(target.dataset.copy || ''))
     setToast('已复制到剪贴板')
+    return
+  }
+  if (action === 'copy-launch-command') {
+    const command = state.launch?.preview || ''
+    if (command && !state.launch?.error) {
+      void navigator.clipboard.writeText(command)
+      setToast('启动命令已复制')
+    }
     return
   }
   if (action === 'history-edit') {
@@ -1795,11 +2078,24 @@ appEl.addEventListener('click', event => {
       state.active = 'overview'
     }
     state.attachmentMenuOpen = false
+    state.attachmentMenuPosition = null
     render()
   }
   if (action === 'toggle-attachment-menu') {
-    state.attachmentMenuOpen = !state.attachmentMenuOpen
+    if (state.attachmentMenuOpen) {
+      state.attachmentMenuOpen = false
+      state.attachmentMenuPosition = null
+    } else {
+      openAttachmentMenu(target)
+    }
     render()
+    return
+  }
+  if (action === 'close-attachment-menu') {
+    state.attachmentMenuOpen = false
+    state.attachmentMenuPosition = null
+    render()
+    return
   }
   if (action === 'copy-code') {
     const block = getCodeBlock(target.dataset.messageIndex, target.dataset.codeIndex)
@@ -1845,12 +2141,9 @@ appEl.addEventListener('click', event => {
       createdAt: Date.now(),
     })
     state.attachmentMenuOpen = false
+    state.attachmentMenuPosition = null
     saveCurrentSession()
     render()
-  }
-  if (action === 'open-mcp-settings') {
-    state.attachmentMenuOpen = false
-    setToast('MCP 服务器入口已保留；llama.cpp 原生 OpenAI 接口暂不直接运行 MCP。')
   }
   if (action === 'remove-attachment') {
     state.attachments.splice(Number(target.dataset.index), 1)

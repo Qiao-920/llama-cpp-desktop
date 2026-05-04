@@ -458,6 +458,8 @@ button {
   width: min(820px, 86%);
   margin: 0 auto;
   min-width: 0;
+  position: relative;
+  z-index: 3;
 }
 
 .composer {
@@ -481,7 +483,9 @@ button {
 .attach-menu {
   position: absolute;
   left: 0;
-  bottom: 48px;
+  top: 48px;
+  bottom: auto;
+  z-index: 25;
   width: 156px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -490,6 +494,25 @@ button {
   padding: 6px;
   display: grid;
   gap: 4px;
+}
+
+.attach-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 119;
+  background: transparent;
+}
+
+.attach-menu.floating {
+  position: fixed;
+  z-index: 120;
+  width: 206px;
+  top: auto;
+  bottom: auto;
+  left: auto;
+  padding: 8px;
+  border-radius: 8px;
+  box-shadow: 0 18px 44px rgba(18, 22, 17, 0.18);
 }
 
 .attach-menu button {
@@ -506,26 +529,72 @@ button {
   background: #f1f2ee;
 }
 
+.attach-menu button:disabled {
+  cursor: not-allowed;
+  color: #a1a79f;
+  background: transparent;
+}
+
+.attach-menu button:disabled span.menu-icon {
+  opacity: 0.5;
+}
+
 .attachment-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin: 0 0 10px;
+  min-width: 0;
 }
 
 .bubble .attachment-row {
-  margin: 10px 0 0;
+  margin: 8px 0 0;
+}
+
+.message-attachment-row {
+  justify-content: flex-end;
+  align-self: flex-end;
+  max-width: 100%;
+  margin: 0 0 8px;
+}
+
+.chat-image-attachment {
+  width: min(280px, 52vw);
+  max-width: 100%;
+  max-height: 320px;
+  display: block;
+  border: 0;
+  border-radius: 18px;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  box-shadow: none;
+}
+
+.chat-image-attachment img {
+  max-width: 100%;
+  max-height: 320px;
+  width: auto;
+  height: auto;
+  display: block;
+  object-fit: contain;
+  border-radius: 18px;
 }
 
 .attachment-card.image {
   position: relative;
-  width: 220px;
+  width: 172px;
+  max-width: 100%;
   margin: 0;
   border: 1px solid var(--green-line);
-  border-radius: 12px;
+  border-radius: 8px;
   background: #f6faf4;
   overflow: hidden;
-  box-shadow: 0 8px 22px rgba(18, 22, 17, 0.06);
+  box-shadow: 0 8px 20px rgba(18, 22, 17, 0.05);
+}
+
+.attachment-card.image.editable {
+  width: 188px;
 }
 
 .attachment-image-trigger {
@@ -539,7 +608,7 @@ button {
 .attachment-image-trigger img {
   display: block;
   width: 100%;
-  height: 168px;
+  height: 112px;
   object-fit: cover;
   background: #eef2eb;
 }
@@ -547,11 +616,11 @@ button {
 .attachment-card figcaption {
   display: grid;
   gap: 3px;
-  padding: 10px 12px 12px;
+  padding: 7px 9px 9px;
 }
 
 .attachment-card figcaption strong {
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.45;
   color: var(--ink);
   overflow: hidden;
@@ -560,21 +629,25 @@ button {
 }
 
 .attachment-card figcaption span {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .attachment-chip {
-  max-width: 260px;
+  max-width: min(360px, 100%);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #f1f2ee;
-  padding: 7px 9px;
+  padding: 6px 8px;
   display: inline-flex;
   align-items: center;
   gap: 7px;
   color: var(--ink);
   font-size: 12px;
+  min-width: 0;
 }
 
 .attachment-chip.image {
@@ -582,9 +655,32 @@ button {
   background: var(--green-soft);
 }
 
+.attachment-chip.message-file,
+.message-attachment-row .attachment-chip {
+  max-width: min(420px, 100%);
+  border-color: #e2e4df;
+  background: #f7f8f5;
+  border-radius: 999px;
+  padding: 8px 11px;
+}
+
 .attachment-chip strong {
   color: var(--muted);
   font-size: 11px;
+  flex: 0 0 auto;
+}
+
+.attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-size {
+  color: var(--muted);
+  font-size: 11px;
+  flex: 0 0 auto;
 }
 
 .attachment-chip button {
@@ -592,6 +688,13 @@ button {
   height: 20px;
   border: 0;
   border-radius: 8px;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--ink);
+}
+
+.attachment-chip .attachment-remove {
+  position: static;
+  flex: 0 0 auto;
   background: rgba(0, 0, 0, 0.06);
   color: var(--ink);
 }
@@ -1181,6 +1284,11 @@ button {
 
 .log-entry strong {
   font-weight: 400;
+}
+
+.log-entry em {
+  min-width: 0;
+  font-style: normal;
   overflow-wrap: anywhere;
 }
 
@@ -1280,6 +1388,9 @@ button {
 .message.user .message-body {
   order: 1;
   width: min(860px, 88%);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
 }
 
 .message.assistant .message-body,
@@ -1303,6 +1414,11 @@ button {
   margin: 0 0 10px;
 }
 
+.muted-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .typing-line {
   color: var(--muted);
   min-height: 32px;
@@ -1324,6 +1440,38 @@ button {
   font-size: 12px;
   padding: 5px 8px;
   margin-bottom: 8px;
+}
+
+.raw-output-block {
+  margin: 14px 0 0;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  background: #f7f8f4;
+  overflow: hidden;
+  display: block;
+}
+
+.raw-output-block summary {
+  cursor: pointer;
+  padding: 9px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.raw-output-block pre {
+  margin: 0;
+  max-height: min(220px, 30vh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border-top: 1px dashed var(--line-strong);
+  padding: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #30352f;
+  font-size: 12px;
+  line-height: 1.65;
 }
 
 .code-block {
@@ -1375,7 +1523,7 @@ button {
 }
 
 .code-block pre {
-  max-height: 520px;
+  max-height: min(360px, 42vh);
   margin: 0;
   overflow: auto;
   padding: 12px 14px;
@@ -1390,12 +1538,55 @@ button {
 
 .message.user .bubble {
   min-height: 38px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
+  display: grid;
+  justify-items: start;
+  width: max-content;
+  max-width: 100%;
   padding: 9px 12px;
   font-size: 14px;
   line-height: 1.55;
+}
+
+.message.user .bubble:has(.attachment-row),
+.message.user .bubble:has(.attachment-card),
+.message.user .bubble:has(.chat-image-attachment) {
+  width: auto;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+}
+
+.message.user .bubble .attachment-card.image {
+  width: min(280px, 52vw);
+  border: 0;
+  border-radius: 18px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.message.user .bubble .attachment-card.image figcaption {
+  display: none;
+}
+
+.message.user .bubble .attachment-image-trigger img {
+  height: auto;
+  max-height: 320px;
+  object-fit: contain;
+  border-radius: 18px;
+}
+
+.message.user .bubble .markdown-text {
+  margin-bottom: 0;
+}
+
+.message.user .bubble .attachment-row {
+  max-width: 100%;
+  justify-content: flex-start;
+}
+
+.message.user .message-actions {
+  align-self: flex-end;
 }
 
 .message.system .bubble {
@@ -1648,62 +1839,9 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
   background: var(--surface-soft);
 }
 
-.attach-menu-split {
-  height: 1px;
-  background: var(--line);
-  margin: 4px -6px;
-}
-
-.mcp-menu-row {
-  position: relative;
-}
-
-.mcp-menu-row em {
-  margin-left: auto;
-  color: var(--muted);
-  font-style: normal;
-}
-
-.mcp-submenu {
-  position: absolute;
-  left: calc(100% - 8px);
-  bottom: 0;
-  width: 280px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow: 0 18px 42px rgba(18, 22, 17, 0.16);
-  padding: 10px;
-  display: none;
-  gap: 10px;
-}
-
-.mcp-menu-row:hover + .mcp-submenu,
-.mcp-submenu:hover {
-  display: grid;
-}
-
-.mcp-submenu input {
-  width: 100%;
-  height: 36px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0 10px;
-  color: var(--muted);
-  background: var(--surface);
-}
-
-.mcp-submenu p {
-  margin: 20px 0;
-  text-align: center;
-  color: var(--muted);
-}
-
-.mcp-submenu button {
-  display: block;
-  width: 100%;
-  border-top: 1px solid var(--line);
-  border-radius: 0;
+.attach-menu button span.menu-icon.video {
+  border-radius: 999px;
+  background: #f5efe9;
 }
 
 .send-btn {
@@ -1749,7 +1887,7 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
 .terminal-screen {
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   padding: 58px 44px 24px;
 }
 
@@ -1791,6 +1929,21 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
   line-height: 1.65;
 }
 
+.terminal-summary {
+  width: min(1050px, 94%);
+  margin: 0 auto 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.terminal-summary strong {
+  color: #4f7450;
+  font-weight: 700;
+}
+
 .terminal-row {
   display: grid;
   grid-template-columns: 92px 72px minmax(0, 1fr);
@@ -1811,7 +1964,9 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
   min-width: 0;
   color: #dcebd7;
   font-style: normal;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .preview-backdrop {
@@ -2030,6 +2185,10 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
   margin-bottom: 12px;
 }
 
+.terminal-summary {
+  width: min(1120px, 94%);
+}
+
 .terminal-head strong {
   font-size: 21px;
 }
@@ -2073,6 +2232,58 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
 
 .terminal-row em {
   color: #293028;
+}
+
+.log-entry em {
+  color: #293028;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-screen {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  background: #ffffff;
+}
+
+.terminal-screen .terminal-head,
+.terminal-screen .terminal-summary,
+.terminal-screen .terminal-console {
+  width: min(1180px, 94%);
+}
+
+.terminal-screen .terminal-summary {
+  margin-bottom: 12px;
+}
+
+.terminal-screen .terminal-console {
+  min-height: 0;
+  border: 1px solid #222;
+  border-radius: 8px;
+  background: #0c0c0c;
+  color: #d7d7d7;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.14);
+  padding: 14px 16px;
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow: auto;
+}
+
+.terminal-line {
+  min-height: 19px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: inherit;
+}
+
+.terminal-line + .terminal-line {
+  margin-top: 1px;
+}
+
+.terminal-muted {
+  color: #8b8b8b;
 }
 
 .empty-log {
@@ -2196,14 +2407,14 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
 
 .model-info-panel {
   position: fixed;
-  inset: 48px 88px 34px;
+  inset: 36px 70px 30px;
   z-index: 130;
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 14px;
   background: #fff;
   box-shadow: 0 34px 100px rgba(17, 20, 16, 0.24);
   display: grid;
-  grid-template-rows: 78px minmax(0, 1fr);
+  grid-template-rows: 64px minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -2212,7 +2423,7 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  padding: 0 20px 0 24px;
+  padding: 0 18px 0 22px;
   border-bottom: 1px solid var(--line);
   background: #fff;
 }
@@ -2228,22 +2439,38 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
 }
 
 .model-info-head strong {
-  margin-top: 4px;
-  font-size: 22px;
+  margin-top: 2px;
+  font-size: 18px;
 }
 
 .model-info-body {
   min-height: 0;
   overflow: auto;
-  padding: 24px;
+  padding: 14px 16px 16px;
   background: #fcfcfa;
   display: grid;
-  gap: 22px;
+  gap: 12px;
+  align-content: start;
+}
+
+.model-info-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.model-info-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
 }
 
 .model-info-grid {
-  border: 1px solid var(--line);
-  border-radius: 14px;
+  border: 0;
+  border-radius: 0;
   background: #fff;
   overflow: hidden;
 }
@@ -2255,10 +2482,11 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
 
 .model-info-row {
   display: grid;
-  grid-template-columns: 160px minmax(0, 1fr) 40px;
-  gap: 12px;
+  grid-template-columns: 92px minmax(0, 1fr) 30px;
+  gap: 8px;
   align-items: center;
-  padding: 14px 18px;
+  min-height: 36px;
+  padding: 7px 10px;
   border-bottom: 1px solid #ecefe9;
 }
 
@@ -2268,22 +2496,24 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
 
 .model-info-row span {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .model-info-row strong {
   min-width: 0;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--ink);
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .icon-copy-btn {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   background: #f7f8f4;
   color: var(--ink);
   font-size: 14px;
@@ -2303,7 +2533,7 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
 
 .model-template-card {
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 10px;
   background: #fff;
   overflow: hidden;
 }
@@ -2313,13 +2543,19 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 18px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--line);
+}
+
+.model-template-head.compact-head {
+  min-height: 38px;
+  padding: 9px 10px;
 }
 
 .model-template-head span {
   font-weight: 700;
   color: var(--ink);
+  font-size: 14px;
 }
 
 .small-btn {
@@ -2329,16 +2565,16 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
 
 .model-template-card pre {
   margin: 0;
-  padding: 18px;
-  max-height: 360px;
+  padding: 12px;
+  max-height: 220px;
   overflow: auto;
   background: #f7f8f4;
   color: #2f342e;
-  font-size: 13px;
-  line-height: 1.7;
+  font-size: 12px;
+  line-height: 1.55;
   font-family: "Cascadia Mono", Consolas, monospace;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  overflow-wrap: normal;
 }
 
 .model-info-empty {
@@ -2354,6 +2590,16 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
 
 .model-info-empty.error {
   color: var(--danger);
+}
+
+@media (max-width: 1180px) {
+  .model-info-panel {
+    inset: 28px 28px 24px;
+  }
+
+  .model-info-columns {
+    grid-template-columns: 1fr;
+  }
 }
 
 .settings-panel {
@@ -2488,6 +2734,54 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.65;
+}
+
+.settings-callout {
+  margin-top: 14px;
+  border: 1px solid #dce4d8;
+  border-radius: 8px;
+  background: #f5f8f2;
+  color: #465243;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.command-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.command-preview.compact {
+  margin-top: 14px;
+}
+
+.command-preview pre {
+  margin: 0;
+  min-height: 42px;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #151713;
+  color: #dcebd7;
+  padding: 11px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.command-preview.has-error pre {
+  background: #241715;
+  color: #ffd8d2;
+  border-color: #efc8c1;
+}
+
+.command-preview button {
+  align-self: start;
 }
 
 .settings-inline-actions {
