@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows portable exe
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build portable exe
+        run: npm run dist
+
+      - name: Generate checksum
+        shell: pwsh
+        run: |
+          $hash = Get-FileHash -LiteralPath "dist/Llama.cpp-Desktop.exe" -Algorithm SHA256
+          "$($hash.Hash)  Llama.cpp-Desktop.exe" | Set-Content -LiteralPath "dist/Llama.cpp-Desktop.exe.sha256" -Encoding ascii
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Llama.cpp 桌面 ${{ github.ref_name }}
+          files: |
+            dist/Llama.cpp-Desktop.exe
+            dist/Llama.cpp-Desktop.exe.sha256
