@@ -32,7 +32,7 @@ body {
   overflow: hidden;
   background: var(--bg);
   color: var(--ink);
-  font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  font-family: "Microsoft YaHei UI", "Segoe UI", "Noto Sans CJK SC", "Noto Sans", sans-serif;
   letter-spacing: 0;
 }
 

@@ -1,8 +1,8 @@
 {
   "name": "llama-cpp-desktop",
   "version": "0.6.13",
-  "description": "A Windows desktop control panel for running and chatting with a local llama.cpp server.",
-  "author": "",
+  "description": "A desktop control panel for running and chatting with a local llama.cpp server. Supports Windows & Linux.",
+  "author": "Nathaniel <nathaniel@users.noreply.github.com>",
   "license": "MIT",
   "type": "module",
   "main": "desktop/main.mjs",
@@ -12,7 +12,7 @@
     "dist": "electron-builder --publish never"
   },
   "devDependencies": {
-    "electron": "41.1.1",
+    "electron": "^41.1.1",
     "electron-builder": "26.8.1"
   }
 }

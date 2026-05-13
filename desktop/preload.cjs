@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('llamaDesktop', {
+  platform: process.platform,
   getState: () => ipcRenderer.invoke('llama:get-state'),
   saveConfig: payload => ipcRenderer.invoke('llama:save-config', payload),
   startServer: payload => ipcRenderer.invoke('llama:start-server', payload),

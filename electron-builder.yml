@@ -12,5 +12,11 @@ win:
   target:
     - portable
   artifactName: Llama.cpp-Desktop.${ext}
+linux:
+  icon: assets/llama-cpp.png
+  target:
+    - AppImage
+    - deb
+  artifactName: Llama.cpp-Desktop-${arch}.${ext}
 asar: true
 compression: normal
