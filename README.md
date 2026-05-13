@@ -4,13 +4,13 @@
   <h1>Llama.cpp Desktop</h1>
 
   <p>
-    一个给 Windows 本地 llama.cpp 准备的桌面端控制面板。
+    一个给本地 llama.cpp 准备的桌面端控制面板（支持 Windows 与 Linux）。
     <br />
     启动服务、配置模型、查看日志、直接聊天和接入 OpenAI Compatible 客户端，都放在一个窗口里。
   </p>
 
   <p>
-    <img alt="Windows" src="https://img.shields.io/badge/Windows-10%20%2F%2011-506f51?style=flat-square" />
+    <img alt="Windows" src="https://img.shields.io/badge/Windows-10%20%2F%2011-506f51?style=flat-square" /> <img alt="Linux" src="https://img.shields.io/badge/Linux-Ubuntu%2022.04%2B-506f51?style=flat-square" />
     <img alt="Electron" src="https://img.shields.io/badge/Electron-41-506f51?style=flat-square" />
     <img alt="llama.cpp" src="https://img.shields.io/badge/llama.cpp-local-506f51?style=flat-square" />
     <img alt="License" src="https://img.shields.io/badge/license-MIT-151713?style=flat-square" />
@@ -23,7 +23,7 @@
 
 | 功能 | 说明 |
 | --- | --- |
-| 本地直连 | 直接启动 llama.cpp 原版目录里的 `llama-server.exe`，不强依赖额外启动器 |
+| 本地直连 | 直接启动 llama.cpp 原版目录里的 `llama-server`，不强依赖额外启动器 |
 | OpenAI 兼容 | 默认提供 `http://127.0.0.1:8080/v1`，可接入 OpenClaw、Claude Code 等客户端 |
 | 桌面聊天 | 内置网页端风格聊天页面，支持流式回复、历史对话、搜索和消息操作 |
 | 附件入口 | 支持图片、文本、PDF 等附件入口，图片可在聊天里预览 |
@@ -38,12 +38,12 @@
 
 [打开 Releases](https://github.com/Qiao-920/llama-cpp-desktop/releases)
 
-下载 `Llama.cpp-Desktop.exe` 后双击运行即可。项目本身不包含模型文件和 llama.cpp 二进制文件，需要你本机已经有可用的 llama.cpp Windows 构建目录。
+Windows 下载 `Llama.cpp-Desktop.exe` 后双击运行即可。Linux 下载 `Llama.cpp-Desktop-x86_64.AppImage` 后赋予可执行权限并运行。项目本身不包含模型文件和 llama.cpp 二进制文件，需要你本机已经有可用的 llama.cpp 构建。
 
 ## 快速开始
 
 1. 下载并打开 `Llama.cpp-Desktop.exe`。
-2. 在设置里选择 llama.cpp 原文件目录，或直接选择 `llama-server.exe`。
+2. 在设置里选择 llama.cpp 原文件目录，或直接选择 `llama-server`。
 3. 选择你的 GGUF 模型文件。
 4. 保存配置并启动服务。
 5. 使用内置聊天，或把 `http://127.0.0.1:8080/v1` 接入 OpenAI 兼容客户端。
@@ -65,7 +65,7 @@ npm run dist
 
 ## 当前限制 / Roadmap
 
-- 当前主要面向 Windows 10 / 11。Ubuntu、macOS 等跨平台版本需要继续适配路径、进程管理、托盘和打包配置。
+- 当前支持 Windows 10 / 11 和 Ubuntu 22.04+（通过 AppImage 或 deb 安装）。macOS 等更多平台需要继续适配。
 - 项目不内置 llama.cpp、模型文件、显卡驱动或 CUDA / Vulkan 运行库，需要用户本机已有可用环境。
 - 图片入口可以预览并发送图片，但真正理解图片需要视觉模型和对应的 `mmproj` 多模态投影文件。
 - 普通文本模型不能因为上传了图片就自动具备看图能力；视频理解当前暂未支持。
@@ -88,7 +88,7 @@ scripts/     图标生成脚本
 
 - llama.cpp 二进制文件
 - GGUF / GGML 模型文件
-- 打包生成的 exe
+- 打包生成的可执行文件
 - 本地配置文件和运行日志
 
 ## License

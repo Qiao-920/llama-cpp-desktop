@@ -1,0 +1,166 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1778682050119,
+  "projectRoot": "/home/nathaniel/workspace/Library/llama-cpp-desktop",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "npm",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": "npm run start",
+    "scripts": {
+      "start": "electron .",
+      "dist": "electron-builder --publish never"
+    }
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "assets",
+      "docs",
+      "scripts"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "assets": {
+      "path": "assets",
+      "purpose": "Static assets",
+      "fileCount": 3,
+      "lastAccessed": 1778682050108,
+      "keyFiles": [
+        "llama-cpp-tray.png",
+        "llama-cpp.ico",
+        "llama-cpp.png"
+      ]
+    },
+    "desktop": {
+      "path": "desktop",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1778682050109,
+      "keyFiles": [
+        "main.mjs",
+        "preload.cjs"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 1,
+      "lastAccessed": 1778682050115,
+      "keyFiles": [
+        "desktop-preview.svg"
+      ]
+    },
+    "renderer": {
+      "path": "renderer",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1778682050117,
+      "keyFiles": [
+        "app.js",
+        "index.html",
+        "styles.css"
+      ]
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 2,
+      "lastAccessed": 1778682050117,
+      "keyFiles": [
+        "create-icon.ps1",
+        "create-icon.sh"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "desktop/main.mjs",
+      "accessCount": 28,
+      "lastAccessed": 1778195492382,
+      "type": "file"
+    },
+    {
+      "path": "renderer/app.js",
+      "accessCount": 23,
+      "lastAccessed": 1778195914077,
+      "type": "file"
+    },
+    {
+      "path": "README.md",
+      "accessCount": 12,
+      "lastAccessed": 1778195730981,
+      "type": "file"
+    },
+    {
+      "path": "package.json",
+      "accessCount": 8,
+      "lastAccessed": 1778707044116,
+      "type": "file"
+    },
+    {
+      "path": "scripts/create-icon.sh",
+      "accessCount": 6,
+      "lastAccessed": 1778195977930,
+      "type": "file"
+    },
+    {
+      "path": "desktop/preload.cjs",
+      "accessCount": 4,
+      "lastAccessed": 1778195698396,
+      "type": "file"
+    },
+    {
+      "path": "renderer/styles.css",
+      "accessCount": 4,
+      "lastAccessed": 1778195700736,
+      "type": "file"
+    },
+    {
+      "path": "renderer/index.html",
+      "accessCount": 2,
+      "lastAccessed": 1778195021216,
+      "type": "file"
+    },
+    {
+      "path": "scripts/create-icon.ps1",
+      "accessCount": 2,
+      "lastAccessed": 1778195021374,
+      "type": "file"
+    },
+    {
+      "path": "LICENSE",
+      "accessCount": 1,
+      "lastAccessed": 1778194961896,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

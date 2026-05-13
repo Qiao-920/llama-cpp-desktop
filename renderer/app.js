@@ -1,4 +1,11 @@
-﻿const sections = [
+﻿const _platform = window.llamaDesktop.platform
+const _isWindows = _platform === 'win32'
+const _isLinux = _platform === 'linux'
+function _serverBin() {
+  return _isWindows ? 'llama-server.exe' : 'llama-server'
+}
+
+const sections = [
   ['chat', '对话', '桌面端直接使用模型'],
   ['paths', '路径', '启动器、配置文件和服务端'],
   ['model', '模型', 'GGUF 与多模态投影'],
@@ -284,7 +291,7 @@ function buildModelInfoRows(info) {
       { label: 'Top-P / Top-K', value: `${config.top_p ?? info?.topP ?? ''} / ${config.top_k ?? info?.topK ?? ''}` },
       { label: 'Min-P', value: `${config.min_p ?? info?.minP ?? ''}` },
       { label: 'Presence / Repeat', value: `${config.presence_penalty ?? info?.presencePenalty ?? ''} / ${config.repeat_penalty ?? info?.repeatPenalty ?? ''}` },
-      { label: '服务端', value: info?.build || basename(config.llama_server_path) || 'llama-server.exe', copy: config.llama_server_path || '' },
+      { label: '服务端', value: info?.build || basename(config.llama_server_path) || _serverBin(), copy: config.llama_server_path || '' },
     ],
     templateText,
   }
@@ -857,7 +864,7 @@ function selectField(name, label, choices, hint = '') {
   const value = state.config?.[name] ?? ''
   const directMode = (state.config?.launch_mode || 'direct') !== 'launcher'
   const extra = name === 'launch_mode' && directMode
-    ? field('llama_bin_dir', 'llama.cpp 原文件目录', { pick: 'dir', hint: '选择包含 llama-server.exe 和 CUDA / ggml DLL 的原始目录。' })
+    ? field('llama_bin_dir', 'llama.cpp 原文件目录', { pick: 'dir', hint: '选择包含 llama-server 和 CUDA / ggml 运行库的原始目录。' })
     : ''
   const options = choices
     .map(choice => `<option value="${escapeHtml(choice)}" ${String(choice) === String(value) ? 'selected' : ''}>${escapeHtml(choice || 'auto')}</option>`)
@@ -1230,12 +1237,12 @@ function renderSettingsContent() {
 
   return `
     ${renderSettingsSection('paths', `
-      <div class="settings-note">这里控制桌面端调用哪个启动器，以及启动器使用哪个 llama-server.exe。</div>
+      <div class="settings-note">这里控制桌面端调用哪个启动器，以及启动器使用哪个 llama-server。</div>
       <div class="form-grid single">
-        ${selectField('launch_mode', '启动方式', ['direct', 'launcher'], 'direct = 直接启动 llama-server.exe；launcher = 兼容旧启动器')}
+        ${selectField('launch_mode', '启动方式', ['direct', 'launcher'], `direct = 直接启动 ${_serverBin()}；launcher = 兼容旧启动器`)}
         ${field('config_path', '配置文件', { pick: 'toml', hint: '默认使用启动器目录下的 config.toml。' })}
-        ${field('launcher_path', '启动器 EXE', { pick: 'exe', hint: '桌面端启动服务时调用这个程序。' })}
-        ${field('llama_server_path', 'llama-server.exe', { pick: 'exe', hint: '保存后写入 config.toml 的 llama_server_path。' })}
+        ${field('launcher_path', _isWindows ? '启动器 EXE' : '启动器路径', { pick: 'exe', hint: '桌面端启动服务时调用这个程序。' })}
+        ${field('llama_server_path', _serverBin(), { pick: 'exe', hint: '保存后写入 config.toml 的 llama_server_path。' })}
       </div>
     `)}
 
@@ -1487,11 +1494,11 @@ function renderModernSettingsContent() {
   if (tab === 'io') {
     return `
       <div class="settings-stack">
-        ${renderModernSettingsCard('路径', '桌面端直连模式下，真正关键的是 llama-server.exe 和模型文件。', `
+        ${renderModernSettingsCard('路径', `桌面端直连模式下，真正关键的是 ${_serverBin()} 和模型文件。`, `
           <div class="form-grid single">
             ${field('config_path', '配置文件', { pick: 'toml', hint: '仅在兼容旧启动器时使用' })}
             ${field('launcher_path', '启动器 EXE', { pick: 'exe', hint: '仅在 launcher 模式下需要' })}
-            ${field('llama_server_path', 'llama-server.exe', { pick: 'exe', hint: 'direct 模式会直接调用它' })}
+            ${field('llama_server_path', _serverBin(), { pick: 'exe', hint: 'direct 模式会直接调用它' })}
           </div>
         `)}
       </div>
@@ -1910,7 +1917,9 @@ async function retryMessage(index) {
 async function pick(fieldName, kind) {
   const filters = {
     exe: [
-      { name: 'Executable', extensions: ['exe', 'cmd', 'bat'] },
+      ...(_isWindows
+        ? [{ name: 'Executable', extensions: ['exe', 'cmd', 'bat'] }]
+        : [{ name: 'Executable', extensions: ['*'] }]),
       { name: 'All Files', extensions: ['*'] },
     ],
     gguf: [
@@ -1927,7 +1936,7 @@ async function pick(fieldName, kind) {
   if (selected) {
     state.config[fieldName] = selected
     if (fieldName === 'llama_bin_dir') {
-      state.config.llama_server_path = `${selected.replace(/[\\/]+$/, '')}\\llama-server.exe`
+      state.config.llama_server_path = `${selected.replace(/[\\/]+$/, '')}${_isWindows ? '\\' : '/'}${_serverBin()}`
     }
     state.dirty = true
     render()
@@ -2249,7 +2258,7 @@ appEl.addEventListener('input', event => {
     state.config[name] = input.value
   }
   if (name === 'llama_bin_dir') {
-    state.config.llama_server_path = `${String(input.value || '').replace(/[\\/]+$/, '')}\\llama-server.exe`
+    state.config.llama_server_path = `${String(input.value || '').replace(/[\\/]+$/, '')}${_isWindows ? '\\' : '/'}${_serverBin()}`
   }
   state.dirty = true
 })

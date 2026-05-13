@@ -42,3 +42,37 @@ jobs:
           files: |
             dist/Llama.cpp-Desktop.exe
             dist/Llama.cpp-Desktop.exe.sha256
+
+  build-ubuntu:
+    name: Build Ubuntu AppImage & deb
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build AppImage & deb
+        run: npm run dist
+
+      - name: Generate checksums
+        run: |
+          sha256sum dist/Llama.cpp-Desktop-*.AppImage | tee dist/Llama.cpp-Desktop-x86_64.AppImage.sha256
+          sha256sum dist/Llama.cpp-Desktop-*.deb | tee dist/Llama.cpp-Desktop-amd64.deb.sha256
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Llama.cpp-Desktop-*.AppImage
+            dist/Llama.cpp-Desktop-*.AppImage.sha256
+            dist/Llama.cpp-Desktop-*.deb
+            dist/Llama.cpp-Desktop-*.deb.sha256

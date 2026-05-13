@@ -5,15 +5,50 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+const isWindows = process.platform === 'win32'
+const isLinux = process.platform === 'linux'
+
+function serverBinaryName() {
+  return isWindows ? 'llama-server.exe' : 'llama-server'
+}
+
+function serverLauncherName() {
+  return isWindows ? 'llama-server-launcher.exe' : 'llama-server-launcher'
+}
+
+async function killProcess(pid) {
+  if (isWindows) {
+    await new Promise(resolve => {
+      const child = spawn('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      })
+      child.once('exit', resolve)
+      child.once('error', resolve)
+    })
+  } else {
+    try {
+      process.kill(pid, 'SIGTERM')
+      await new Promise(resolve => setTimeout(resolve, 2000))
+    } catch {
+      // Process may already be dead
+    }
+  }
+}
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const rootDir = path.resolve(__dirname, '..')
 const preloadPath = path.join(__dirname, 'preload.cjs')
 const rendererPath = path.join(rootDir, 'renderer', 'index.html')
-const iconPath = path.join(rootDir, 'assets', 'llama-cpp.ico')
+const iconPath = path.join(rootDir, 'assets', isLinux ? 'llama-cpp.png' : 'llama-cpp.ico')
 const trayIconPath = path.join(rootDir, 'assets', 'llama-cpp-tray.png')
-const authoredBaseDir = 'G:\\llama.cpp\\llama.cpp启动器'
-const authoredServerPath = 'G:\\llama.cpp\\llama-b8272-bin-win-cuda-12.4-x64\\llama-server.exe'
+const authoredBaseDir = isWindows
+  ? 'G:\\llama.cpp\\llama.cpp启动器'
+  : path.join(process.env.HOME || '/home/user', '.llama.cpp')
+const authoredServerPath = isWindows
+  ? 'G:\\llama.cpp\\llama-b8272-bin-win-cuda-12.4-x64\\llama-server.exe'
+  : '/usr/local/bin/llama-server'
 const authoredServerDir = path.dirname(authoredServerPath)
 
 let mainWindow = null
@@ -46,7 +81,7 @@ function defaultConfigPath() {
 }
 
 function defaultLauncherPath() {
-  return path.join(defaultBaseDir(), 'llama-server-launcher.exe')
+  return path.join(defaultBaseDir(), serverLauncherName())
 }
 
 function defaultStatePath() {
@@ -309,7 +344,7 @@ function normalizeConfig(values, state = {}) {
     ...merged,
     launch_mode: launchMode,
     llama_bin_dir: llamaBinDir,
-    llama_server_path: path.join(llamaBinDir, 'llama-server.exe'),
+    llama_server_path: path.join(llamaBinDir, serverBinaryName()),
     port: toNumber(merged.port, base.port),
     ctx_size: toNumber(merged.ctx_size, base.ctx_size),
     n_predict: toNumber(merged.n_predict, base.n_predict),
@@ -352,7 +387,7 @@ function buildToml(config) {
     '# desktop launch mode: direct or launcher',
     `launch_mode = ${tomlString(config.launch_mode || 'direct')}`,
     '',
-    '# llama-server.exe 的绝对路径',
+    '# llama-server 的绝对路径',
     `llama_server_path = ${tomlString(config.llama_server_path)}`,
     '',
     '# 模型路径',
@@ -929,7 +964,7 @@ function updateTrayMenu() {
         if (serverChild && serverChild.exitCode === null) {
           stoppingServer = true
           setStatus({ state: 'stopping', message: '正在停止服务' })
-          await taskkill(serverChild.pid)
+          await killProcess(serverChild.pid)
         }
       },
     },
@@ -965,12 +1000,16 @@ function createMainWindow() {
     title: 'Llama.cpp Desktop',
     backgroundColor: '#F7F7F4',
     icon: iconPath,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#F4F3EC',
-      symbolColor: '#2B2922',
-      height: 36,
-    },
+    ...(isLinux
+      ? {}
+      : {
+          titleBarStyle: 'hidden',
+          titleBarOverlay: {
+            color: '#F4F3EC',
+            symbolColor: '#2B2922',
+            height: 36,
+          },
+        }),
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -1005,17 +1044,6 @@ function createMainWindow() {
   Menu.setApplicationMenu(null)
 }
 
-async function taskkill(pid) {
-  await new Promise(resolve => {
-    const child = spawn('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
-      windowsHide: true,
-      stdio: 'ignore',
-    })
-    child.once('exit', resolve)
-    child.once('error', resolve)
-  })
-}
-
 function registerIpc() {
   ipcMain.handle('llama:get-state', async () => appState())
 
@@ -1042,7 +1070,7 @@ function registerIpc() {
       throw new Error(`找不到启动器：${config.launcher_path}`)
     }
     if (!existsSync(config.llama_server_path)) {
-      throw new Error(`找不到 llama-server.exe：${config.llama_server_path}`)
+      throw new Error(`找不到 llama-server：${config.llama_server_path}`)
     }
     if (!existsSync(config.model)) {
       throw new Error(`找不到模型文件：${config.model}`)
@@ -1065,7 +1093,7 @@ function registerIpc() {
     const command = launch.command
     const args = launch.args
     const cwd = launch.cwd
-    addLog('desktop', `启动方式：${directMode ? 'direct llama-server.exe' : 'launcher'}`)
+    addLog('desktop', `启动方式：${directMode ? 'direct llama-server' : 'launcher'}`)
     addLog('desktop', `llama-server：${config.llama_server_path}`)
     if (directMode) {
       addLog('desktop', `参数：${args.join(' ')}`)
@@ -1077,12 +1105,14 @@ function registerIpc() {
 
     serverChild = spawn(command, args, {
       cwd,
-      windowsHide: true,
+      ...(isWindows ? { windowsHide: true } : {}),
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
         NO_COLOR: '1',
-        Path: `${serverDir};${process.env.Path || process.env.PATH || ''}`,
+        ...(isWindows
+          ? { Path: `${serverDir};${process.env.Path || process.env.PATH || ''}` }
+          : { PATH: `${serverDir}:${process.env.PATH || ''}` }),
       },
     })
 
@@ -1112,7 +1142,7 @@ function registerIpc() {
     if (serverChild && serverChild.exitCode === null) {
       stoppingServer = true
       setStatus({ state: 'stopping', message: '正在停止服务' })
-      await taskkill(serverChild.pid)
+      await killProcess(serverChild.pid)
     }
     return appState()
   })
@@ -1174,7 +1204,7 @@ function registerIpc() {
       presencePenalty: toNumber(config.presence_penalty, ''),
       repeatPenalty: toNumber(config.repeat_penalty, ''),
       serverUrl,
-      build: propsPayload?.build_info || path.basename(config.llama_server_path || 'llama-server.exe'),
+      build: propsPayload?.build_info || path.basename(config.llama_server_path || serverBinaryName()),
       chatTemplateText: String(propsPayload?.chat_template || config.chat_template_kwargs || '').trim(),
       propsSource: Boolean(propsPayload),
       modelSource: Boolean(modelsPayload),
@@ -1485,7 +1515,7 @@ if (!gotLock) {
     if (serverChild && serverChild.exitCode === null && !stoppingServer) {
       event.preventDefault()
       stoppingServer = true
-      await taskkill(serverChild.pid)
+      await killProcess(serverChild.pid)
       app.quit()
     }
   })
