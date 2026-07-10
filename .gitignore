@@ -15,6 +15,7 @@ builder-debug.yml
 
 # local runtime state
 desktop-state.json
+.superpowers/
 *.log
 logs/
 
