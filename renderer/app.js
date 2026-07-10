@@ -837,6 +837,7 @@ function field(name, label, options = {}) {
     ? `<button class="icon-btn text-btn" type="button" data-pick="${name}" data-kind="${options.pick}">选择</button>`
     : ''
   const hint = options.hint ? `<div class="hint">${escapeHtml(options.hint)}</div>` : ''
+  const warning = configWarning(options.warningId)
   const input = options.textarea
     ? `<textarea data-field="${name}" spellcheck="false">${escapeHtml(value)}</textarea>`
     : `<input data-field="${name}" type="${type}" value="${escapeHtml(value)}" ${options.min !== undefined ? `min="${options.min}"` : ''} />`
@@ -849,8 +850,14 @@ function field(name, label, options = {}) {
         ${picker}
       </div>
       ${hint}
+      ${warning}
     </label>
   `
+}
+
+function configWarning(id) {
+  const warning = (state.configWarnings || []).find(item => item.id === id)
+  return warning ? `<div class="settings-callout" role="alert">${escapeHtml(warning.message)}</div>` : ''
 }
 
 function selectField(name, label, choices, hint = '') {
@@ -1402,22 +1409,22 @@ function renderModernSettingsContent() {
           ${checks}
           <div class="endpoint-box">
             <span>OpenAI Base URL</span>
-            <strong>${escapeHtml(state.status.url || '')}/v1</strong>
+            <strong>${escapeHtml(state.localBaseUrl || state.status.url || '')}/v1</strong>
           </div>
           <div class="endpoint-box">
             <span>Chat Completions</span>
-            <strong>${escapeHtml(state.status.url || '')}/v1/chat/completions</strong>
+            <strong>${escapeHtml(state.chatCompletionsUrl || `${state.status.url || ''}/v1/chat/completions`)}</strong>
           </div>
         `)}
         ${renderModernSettingsCard('运行参数', '桌面端直连 llama.cpp 时，这一组就是最常用的核心参数。', `
           <div class="form-grid two">
             ${selectField('launch_mode', '启动方式', ['direct', 'launcher'], 'direct = 直接调用 llama-server.exe；launcher = 兼容旧启动器')}
-            ${field('host', 'Host')}
+            ${field('host', 'Host', { warningId: 'public-host' })}
             ${field('port', 'Port', { type: 'number', min: 1 })}
-            ${field('ctx_size', '上下文大小 ctx_size', { type: 'number', min: 1 })}
+            ${field('ctx_size', '上下文大小 ctx_size', { type: 'number', min: 1, warningId: 'high-context' })}
             ${field('n_predict', '最大输出 n_predict', { type: 'number' })}
             ${field('n_gpu_layers', 'GPU 层数', { type: 'number' })}
-            ${field('request_timeout_ms', '请求超时 ms', { type: 'number', min: 30000 })}
+            ${field('request_timeout_ms', '请求超时 ms', { type: 'number', min: 30000, warningId: 'short-timeout' })}
           </div>
           <div class="settings-callout">32GB 内存建议先用 32768 或 65536 上下文。131072 这类超长上下文会显著增加 KV cache，占满内存是正常风险。</div>
         `)}
@@ -1684,6 +1691,10 @@ function setToast(message) {
 
 function patchFromBackend(payload) {
   if (payload.config) state.config = payload.config
+  if (payload.configWarnings) state.configWarnings = payload.configWarnings
+  if (payload.listenBaseUrl) state.listenBaseUrl = payload.listenBaseUrl
+  if (payload.localBaseUrl) state.localBaseUrl = payload.localBaseUrl
+  if (payload.chatCompletionsUrl) state.chatCompletionsUrl = payload.chatCompletionsUrl
   if (payload.validation) state.validation = payload.validation
   if (payload.status) state.status = payload.status
   if (payload.logs) state.logs = payload.logs

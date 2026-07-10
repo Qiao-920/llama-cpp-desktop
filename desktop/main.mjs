@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { DEFAULT_HOST, assertNoCoreArgConflicts, runtimeWarnings, serviceUrls } from './lib/runtime-policy.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -62,7 +63,7 @@ function defaultConfig() {
     llama_server_path: authoredServerPath,
     model: '',
     mmproj: '',
-    host: '0.0.0.0',
+    host: DEFAULT_HOST,
     port: 8080,
     ctx_size: 32768,
     n_predict: -1,
@@ -508,8 +509,7 @@ async function saveConfig(config) {
 }
 
 function localUrl(config) {
-  const host = config.host && config.host !== '0.0.0.0' ? config.host : '127.0.0.1'
-  return `http://${host}:${config.port}`
+  return serviceUrls(config).localBaseUrl
 }
 
 function hasValue(value) {
@@ -565,6 +565,7 @@ function pushArg(args, flag, value) {
 }
 
 function buildServerArgs(config) {
+  assertNoCoreArgConflicts(config.extra_args)
   const args = []
   pushArg(args, '--model', config.model)
   pushArg(args, '--mmproj', config.mmproj)
@@ -872,6 +873,8 @@ async function appState() {
   const config = await loadConfig()
   return {
     config,
+    configWarnings: runtimeWarnings(config),
+    ...serviceUrls(config),
     status: runtimeStatus,
     logs,
     validation: validation(config),
@@ -1022,13 +1025,7 @@ function registerIpc() {
   ipcMain.handle('llama:save-config', async (_event, payload) => {
     const config = await saveConfig(payload.config)
     addLog('desktop', `配置已保存：${config.config_path}`)
-    return {
-      config,
-      validation: validation(config),
-      status: runtimeStatus,
-      logs,
-      launch: buildLaunchDetails(config),
-    }
+    return appState()
   })
 
   ipcMain.handle('llama:start-server', async (_event, payload) => {
@@ -1037,6 +1034,7 @@ function registerIpc() {
     }
 
     const config = await saveConfig(payload.config)
+    assertNoCoreArgConflicts(config.extra_args)
     const directMode = config.launch_mode !== 'launcher'
     if (!directMode && !existsSync(config.launcher_path)) {
       throw new Error(`找不到启动器：${config.launcher_path}`)
@@ -1184,7 +1182,7 @@ function registerIpc() {
 
   ipcMain.handle('llama:chat-completion', async (_event, payload) => {
     const config = normalizeConfig(payload.config)
-    const url = `${localUrl(config)}/v1/chat/completions`
+    const url = serviceUrls(config).chatCompletionsUrl
     const messages = Array.isArray(payload.messages)
       ? payload.messages
           .filter(message => message && (message.role === 'user' || message.role === 'assistant' || message.role === 'system'))
@@ -1259,7 +1257,7 @@ function registerIpc() {
   ipcMain.handle('llama:chat-stream', async (_event, payload) => {
     const config = normalizeConfig(payload.config)
     const requestId = payload.requestId || `${Date.now()}`
-    const url = `${localUrl(config)}/v1/chat/completions`
+    const url = serviceUrls(config).chatCompletionsUrl
     const startedAt = Date.now()
     const messages = Array.isArray(payload.messages)
       ? payload.messages
