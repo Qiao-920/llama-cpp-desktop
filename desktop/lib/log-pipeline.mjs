@@ -50,12 +50,12 @@ export function isImportantRuntimeLine(line) {
     /\b(?:server is listening|server listening|listening on|model loaded|request (?:started|completed)|tokens per second)\b/i.test(text)
 }
 
-export function processLogChunk(source, chunk) {
+function processLogLines(source, rawLines) {
   const entries = []
   let filtered = 0
   let truncated = 0
 
-  for (const rawLine of cleanLogText(chunk).split('\n')) {
+  for (const rawLine of rawLines) {
     const text = rawLine.trim()
     if (!text) continue
     if (shouldFilterLine(text)) {
@@ -71,6 +71,34 @@ export function processLogChunk(source, chunk) {
   }
 
   return { entries, filtered, truncated }
+}
+
+export function processLogChunk(source, chunk) {
+  return processLogLines(source, cleanLogText(chunk).split('\n'))
+}
+
+export function createLogChunkBuffers() {
+  return new Map()
+}
+
+export function processBufferedLogChunk(buffers, source, chunk) {
+  const combined = `${buffers.get(source) || ''}${cleanLogText(chunk)}`
+  const lines = combined.split('\n')
+  const pending = lines.pop() || ''
+
+  if (pending) {
+    buffers.set(source, pending)
+  } else {
+    buffers.delete(source)
+  }
+
+  return processLogLines(source, lines)
+}
+
+export function flushLogChunkBuffer(buffers, source) {
+  const pending = buffers.get(source) || ''
+  buffers.delete(source)
+  return processLogLines(source, [pending])
 }
 
 export function appendVisibleLogs(state, entries, limit) {

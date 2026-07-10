@@ -1,6 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { appendVisibleLogs, isImportantRuntimeLine, processLogChunk } from '../desktop/lib/log-pipeline.mjs'
+import {
+  appendVisibleLogs,
+  createLogChunkBuffers,
+  flushLogChunkBuffer,
+  isImportantRuntimeLine,
+  processBufferedLogChunk,
+  processLogChunk,
+} from '../desktop/lib/log-pipeline.mjs'
 
 test('filters streamed JSON, prompt, code echo, and idle polling', () => {
   const input = ['http: streamed chunk: data: {"choices":[]}', 'prompt: <|im_start|>user', '<div>echo</div>', 'body { color: red; }', 'const answer = 1;', 'que start_loop: waiting for new tasks'].join('\n')
@@ -25,4 +32,34 @@ test('recognizes the runtime lines retained by the terminal', () => {
   assert.equal(isImportantRuntimeLine('CUDA0 ready'), true)
   assert.equal(isImportantRuntimeLine('server listening at 127.0.0.1:8080'), true)
   assert.equal(isImportantRuntimeLine('plain application output'), false)
+})
+
+test('buffers split filter patterns independently for each source', () => {
+  const buffers = createLogChunkBuffers()
+  const results = [
+    processBufferedLogChunk(buffers, 'stdout', 'http: streamed '),
+    processBufferedLogChunk(buffers, 'stderr', 'que start_loop: wai'),
+    processBufferedLogChunk(buffers, 'stdout', 'chunk: data: {"choices":[]}\n'),
+    processBufferedLogChunk(buffers, 'stderr', 'ting for new tasks\n'),
+  ]
+
+  assert.deepEqual(results.flatMap(result => result.entries), [])
+  assert.equal(results.reduce((count, result) => count + result.filtered, 0), 2)
+  assert.deepEqual(flushLogChunkBuffer(buffers, 'stdout').entries, [])
+  assert.deepEqual(flushLogChunkBuffer(buffers, 'stderr').entries, [])
+})
+
+test('truncates a split long line when its pending buffer is flushed', () => {
+  const buffers = createLogChunkBuffers()
+  const line = `server: ${'x'.repeat(500)}`
+
+  const first = processBufferedLogChunk(buffers, 'stdout', line.slice(0, 200))
+  const second = processBufferedLogChunk(buffers, 'stdout', line.slice(200))
+  const flushed = flushLogChunkBuffer(buffers, 'stdout')
+
+  assert.deepEqual(first.entries, [])
+  assert.deepEqual(second.entries, [])
+  assert.equal(flushed.entries.length, 1)
+  assert.equal(flushed.truncated, 1)
+  assert.match(flushed.entries[0].line, /^server: x+ \.\.\. \[truncated \d+ chars\]$/)
 })

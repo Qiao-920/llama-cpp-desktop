@@ -5,7 +5,7 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildRequestMessages, createRequestRegistry, extractStreamDelta, normalizeChatTemplateKwargs } from './lib/chat-pipeline.mjs'
-import { appendVisibleLogs, processLogChunk } from './lib/log-pipeline.mjs'
+import { appendVisibleLogs, createLogChunkBuffers, flushLogChunkBuffer, processBufferedLogChunk, processLogChunk } from './lib/log-pipeline.mjs'
 import { DEFAULT_HOST, assertNoCoreArgConflicts, assertStartableServerConfig, runtimeWarnings, serviceUrls, splitExtraArgs } from './lib/runtime-policy.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -33,6 +33,7 @@ let runtimeStatus = {
   startedAt: null,
 }
 let logs = { entries: [], filtered: 0, truncated: 0, dropped: 0 }
+let serverLogChunkBuffers = createLogChunkBuffers()
 const requestRegistry = createRequestRegistry()
 
 function defaultBaseDir() {
@@ -156,7 +157,20 @@ function logStats() {
 }
 
 function addLog(source, chunk) {
-  const result = processLogChunk(source, chunk)
+  appendLogResult(processLogChunk(source, chunk))
+}
+
+function addBufferedLog(source, chunk) {
+  appendLogResult(processBufferedLogChunk(serverLogChunkBuffers, source, chunk))
+}
+
+function flushServerLogBuffers() {
+  for (const source of ['stdout', 'stderr']) {
+    appendLogResult(flushLogChunkBuffer(serverLogChunkBuffers, source))
+  }
+}
+
+function appendLogResult(result) {
   const entries = result.entries.map(entry => ({ ...entry, at: new Date().toISOString() }))
   logs = appendVisibleLogs({
     ...logs,
@@ -912,6 +926,7 @@ function registerIpc() {
     }
 
     logs = { entries: [], filtered: 0, truncated: 0, dropped: 0 }
+    serverLogChunkBuffers = createLogChunkBuffers()
     stoppingServer = false
     setStatus({
       state: 'starting',
@@ -946,13 +961,15 @@ function registerIpc() {
     })
 
     setStatus({ pid: serverChild.pid })
-    serverChild.stdout?.on('data', chunk => addLog('stdout', chunk))
-    serverChild.stderr?.on('data', chunk => addLog('stderr', chunk))
+    serverChild.stdout?.on('data', chunk => addBufferedLog('stdout', chunk))
+    serverChild.stderr?.on('data', chunk => addBufferedLog('stderr', chunk))
     serverChild.once('error', error => {
+      flushServerLogBuffers()
       addLog('desktop', `启动失败：${error.message}`)
       setStatus({ state: 'error', message: error.message, pid: null })
     })
     serverChild.once('exit', code => {
+      flushServerLogBuffers()
       const message = stoppingServer ? '服务已停止' : `服务进程已退出：${code ?? 'unknown'}`
       addLog('desktop', message)
       serverChild = null
@@ -972,6 +989,7 @@ function registerIpc() {
       stoppingServer = true
       setStatus({ state: 'stopping', message: '正在停止服务' })
       await taskkill(serverChild.pid)
+      flushServerLogBuffers()
     }
     return appState()
   })
