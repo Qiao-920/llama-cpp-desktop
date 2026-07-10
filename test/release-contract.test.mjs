@@ -40,6 +40,8 @@ test('workflow release identity follows package and builder configuration', () =
   assert.match(artifactName, /\$\{ext\}/)
   assert.match(workflow, new RegExp(`^\\s*name: ${escapeRegExp(releaseTitle)}\\s*$`, 'm'))
   assert.match(workflow, new RegExp(`Get-FileHash -LiteralPath "${escapeRegExp(executablePath)}"`))
+  const checksumManifest = `"$($hash.Hash)  ${executableName}"`
+  assert.match(workflow, new RegExp(`${escapeRegExp(checksumManifest)}\\s*\\|\\s*Set-Content`))
   assert.match(workflow, new RegExp(`Set-Content -LiteralPath "${escapeRegExp(checksumPath)}"`))
   assert.match(workflow, new RegExp(`^\\s*${escapeRegExp(executablePath)}\\s*$`, 'm'))
   assert.match(workflow, new RegExp(`^\\s*${escapeRegExp(checksumPath)}\\s*$`, 'm'))
