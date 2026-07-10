@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { buildRequestMessages, createRequestRegistry, extractStreamDelta, normalizeChatTemplateKwargs } from './lib/chat-pipeline.mjs'
 import { DEFAULT_HOST, assertNoCoreArgConflicts, assertStartableServerConfig, runtimeWarnings, serviceUrls, splitExtraArgs } from './lib/runtime-policy.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -31,6 +32,7 @@ let runtimeStatus = {
   startedAt: null,
 }
 let logs = []
+const requestRegistry = createRequestRegistry()
 
 function defaultBaseDir() {
   const candidates = [
@@ -619,41 +621,10 @@ function normalizeChatTemplateKwargsText(raw) {
 }
 
 function parseChatTemplateKwargs(raw) {
-  const text = String(raw || '').trim()
-  if (!text) {
-    return null
-  }
-  const normalized = normalizeChatTemplateKwargsText(text)
-  let parsed
-  try {
-    parsed = JSON.parse(normalized)
-  } catch (error) {
-    throw new Error(`Chat Template Kwargs must be valid JSON: ${error instanceof Error ? error.message : String(error)}`)
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('Chat Template Kwargs must be a JSON object, for example {"enable_thinking": false}')
-  }
-  return parsed
-}
-
-function requestTimeoutSignal(config) {
-  const ms = Math.max(30000, toNumber(config.request_timeout_ms, 600000))
-  return AbortSignal.timeout(ms)
-}
-
-function messageTextContent(content) {
-  if (Array.isArray(content)) {
-    return content
-      .filter(item => item && item.type === 'text')
-      .map(item => String(item.text || '').trim())
-      .filter(Boolean)
-      .join('\n\n')
-  }
-  return String(content || '').trim()
+  return normalizeChatTemplateKwargs(raw)
 }
 
 function prepareChatMessages(rawMessages) {
-  const systemTexts = []
   const messages = []
 
   for (const message of Array.isArray(rawMessages) ? rawMessages : []) {
@@ -694,17 +665,10 @@ function prepareChatMessages(rawMessages) {
     }
 
     if (!Array.isArray(next.content) && !String(next.content || '').trim()) continue
-    if (message.role === 'system') {
-      const systemText = messageTextContent(next.content)
-      if (systemText) systemTexts.push(systemText)
-      continue
-    }
     messages.push(next)
   }
 
-  return systemTexts.length
-    ? [{ role: 'system', content: systemTexts.join('\n\n') }, ...messages]
-    : messages
+  return messages
 }
 
 function buildChatRequestBody(config, messages, stream) {
@@ -820,11 +784,6 @@ async function buildAttachment(filePath) {
   }
 
   return attachment
-}
-
-function contentFromStreamPayload(data) {
-  const choice = data?.choices?.[0]
-  return choice?.delta?.content || choice?.message?.content || data?.content || ''
 }
 
 async function appState() {
@@ -1132,120 +1091,42 @@ function registerIpc() {
 
   ipcMain.handle('llama:chat-completion', async (_event, payload) => {
     const config = normalizeConfig(payload.config)
+    const requestId = String(payload.requestId || `chat-${Date.now()}`)
     const url = serviceUrls(config).chatCompletionsUrl
-    const messages = Array.isArray(payload.messages)
-      ? payload.messages
-          .filter(message => message && (message.role === 'user' || message.role === 'assistant' || message.role === 'system'))
-          .map(message => {
-            const text = String(message.content || '')
-            const attachments = Array.isArray(message.attachments) ? message.attachments : []
-            const textBlocks = attachments
-              .filter(item => item.kind === 'text' && item.text)
-              .map(item => `\n\n--- 附件：${item.name} ---\n${item.text}`)
-            const fileBlocks = attachments
-              .filter(item => item.kind !== 'text' && item.kind !== 'image')
-              .map(item => `\n\n[附件：${item.name}，${item.mime || 'file'}，路径：${item.path}]`)
-            const imageAttachments = attachments.filter(item => item.kind === 'image' && item.dataUrl)
-
-            if (imageAttachments.length > 0) {
-              return {
-                role: message.role,
-                content: [
-                  {
-                    type: 'text',
-                    text: `${text}${textBlocks.join('')}${fileBlocks.join('')}`.trim() || '请分析这些图片。',
-                  },
-                  ...imageAttachments.map(item => ({
-                    type: 'image_url',
-                    image_url: { url: item.dataUrl },
-                  })),
-                ],
-              }
-            }
-
-            return {
-              role: message.role,
-              content: `${text}${textBlocks.join('')}${fileBlocks.join('')}`,
-            }
-          })
-          .filter(message => Array.isArray(message.content) || String(message.content || '').trim())
-      : []
+    const messages = buildRequestMessages(prepareChatMessages(payload.messages))
 
     if (messages.length === 0) {
       throw new Error('没有可发送的消息')
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: path.basename(config.model || 'local-model'),
-        messages,
-        temperature: toNumber(config.temp, 0.8),
-        top_p: toNumber(config.top_p, 0.95),
-        max_tokens: config.n_predict === -1 ? undefined : toNumber(config.n_predict, undefined),
-        chat_template_kwargs: parseChatTemplateKwargs(config.chat_template_kwargs) || undefined,
-        stream: false,
-      }),
-      signal: requestTimeoutSignal(config),
-    })
+    const signal = requestRegistry.start(requestId, Math.max(30000, toNumber(config.request_timeout_ms, 600000)))
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildChatRequestBody(config, messages, false)),
+        signal,
+      })
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => '')
-      throw new Error(`模型接口返回 ${response.status}${text ? `：${text.slice(0, 500)}` : ''}`)
-    }
+      if (!response.ok) {
+        const text = await response.text().catch(() => '')
+        throw new Error(`模型接口返回 ${response.status}${text ? `：${text.slice(0, 500)}` : ''}`)
+      }
 
-    const data = await response.json()
-    const content = data?.choices?.[0]?.message?.content || data?.content || ''
-    return {
-      ok: true,
-      content: String(content || ''),
-      raw: data,
+      const data = await response.json()
+      const { content, thinking } = extractStreamDelta(data)
+      return { ok: true, content, thinking, raw: data }
+    } finally {
+      requestRegistry.finish(requestId)
     }
   })
 
   ipcMain.handle('llama:chat-stream', async (_event, payload) => {
     const config = normalizeConfig(payload.config)
-    const requestId = payload.requestId || `${Date.now()}`
+    const requestId = String(payload.requestId || `chat-${Date.now()}`)
     const url = serviceUrls(config).chatCompletionsUrl
     const startedAt = Date.now()
-    const messages = Array.isArray(payload.messages)
-      ? payload.messages
-          .filter(message => message && (message.role === 'user' || message.role === 'assistant' || message.role === 'system'))
-          .map(message => {
-            const text = String(message.content || '')
-            const attachments = Array.isArray(message.attachments) ? message.attachments : []
-            const textBlocks = attachments
-              .filter(item => item.kind === 'text' && item.text)
-              .map(item => `\n\n--- 附件：${item.name} ---\n${item.text}`)
-            const fileBlocks = attachments
-              .filter(item => item.kind !== 'text' && item.kind !== 'image')
-              .map(item => `\n\n[附件：${item.name}，${item.mime || 'file'}，路径：${item.path}]`)
-            const imageAttachments = attachments.filter(item => item.kind === 'image' && item.dataUrl)
-
-            if (imageAttachments.length > 0) {
-              return {
-                role: message.role,
-                content: [
-                  {
-                    type: 'text',
-                    text: `${text}${textBlocks.join('')}${fileBlocks.join('')}`.trim() || '请分析这些图片。',
-                  },
-                  ...imageAttachments.map(item => ({
-                    type: 'image_url',
-                    image_url: { url: item.dataUrl },
-                  })),
-                ],
-              }
-            }
-
-            return {
-              role: message.role,
-              content: `${text}${textBlocks.join('')}${fileBlocks.join('')}`,
-            }
-          })
-          .filter(message => Array.isArray(message.content) || String(message.content || '').trim())
-      : []
+    const messages = buildRequestMessages(prepareChatMessages(payload.messages))
 
     if (messages.length === 0) {
       throw new Error('没有可发送的消息')
@@ -1253,27 +1134,21 @@ function registerIpc() {
 
     addLog('chat', `request ${requestId}: ${messages.length} messages -> ${url}`)
 
-    let response
+    const signal = requestRegistry.start(requestId, Math.max(30000, toNumber(config.request_timeout_ms, 600000)))
     try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: path.basename(config.model || 'local-model'),
-          messages,
-          temperature: toNumber(config.temp, 0.8),
-          top_p: toNumber(config.top_p, 0.95),
-          max_tokens: config.n_predict === -1 ? undefined : toNumber(config.n_predict, undefined),
-          chat_template_kwargs: parseChatTemplateKwargs(config.chat_template_kwargs) || undefined,
-          stream: true,
-        }),
-        signal: requestTimeoutSignal(config),
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      addLog('chat', `request failed: ${message}`)
-      throw error
-    }
+      let response
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(buildChatRequestBody(config, messages, true)),
+          signal,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        addLog('chat', `request failed: ${message}`)
+        throw error
+      }
 
     if (!response.ok) {
       const text = await response.text().catch(() => '')
@@ -1291,6 +1166,7 @@ function registerIpc() {
     const decoder = new TextDecoder('utf-8')
     let buffer = ''
     let content = ''
+    let thinking = ''
     let raw = null
     let streamAnnounced = false
 
@@ -1313,14 +1189,15 @@ function registerIpc() {
           try {
             const data = JSON.parse(line)
             raw = data
-            const delta = contentFromStreamPayload(data)
-            if (delta) {
+            const delta = extractStreamDelta(data)
+            if (delta.content || delta.thinking) {
               if (!streamAnnounced) {
                 addLog('chat', `streaming response for ${requestId}`)
                 streamAnnounced = true
               }
-              content += delta
-              sendEvent({ type: 'chat-stream', requestId, delta })
+              content += delta.content
+              thinking += delta.thinking
+              sendEvent({ type: 'chat-stream', requestId, delta: delta.content, thinkingDelta: delta.thinking })
             }
           } catch {
             // Ignore malformed stream fragments; llama.cpp can occasionally split aggressively.
@@ -1332,9 +1209,16 @@ function registerIpc() {
     const elapsed = Math.max(0.1, (Date.now() - startedAt) / 1000)
     const approxTokens = Math.max(1, Math.round(String(content || '').length / 3))
     addLog('chat', `stream done: ${approxTokens} approx tokens, ${elapsed.toFixed(1)}s`)
-    sendEvent({ type: 'chat-stream', requestId, done: true, content })
-    return { ok: true, content, raw }
+    sendEvent({ type: 'chat-stream', requestId, done: true, content, thinking })
+      return { ok: true, content, thinking, raw }
+    } finally {
+      requestRegistry.finish(requestId)
+    }
   })
+
+  ipcMain.handle('llama:cancel-chat', async (_event, payload) => ({
+    ok: requestRegistry.cancel(String(payload?.requestId || '')),
+  }))
 
   ipcMain.handle('llama:pick-file', async (_event, payload) => {
     const result = await dialog.showOpenDialog(mainWindow, {

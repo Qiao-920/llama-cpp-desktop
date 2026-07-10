@@ -419,7 +419,7 @@ function splitThinkingOutput(content) {
 
 function renderMessageContent(message, messageIndex) {
   const content = String(message.content || '')
-  if (!content && message.role === 'assistant' && state.chatBusy) {
+  if (!content && !message.thinking && message.role === 'assistant' && state.chatBusy) {
     return '<div class="typing-line">正在生成...</div>'
   }
   if (message.role !== 'assistant') {
@@ -428,7 +428,9 @@ function renderMessageContent(message, messageIndex) {
 
   const counter = { value: 0 }
   const output = []
-  const { answer, thoughts } = splitThinkingOutput(content)
+  const split = splitThinkingOutput(content)
+  const answer = split.answer
+  const thoughts = [String(message.thinking || '').trim(), ...split.thoughts].filter(Boolean)
   const showRawOutput = Boolean(state.config?.show_raw_output)
   const showThinking = state.config?.show_thinking !== false && !showRawOutput
   const expandThinking = Boolean(state.config?.expand_thinking)
@@ -448,11 +450,12 @@ function renderMessageContent(message, messageIndex) {
     output.push(renderCodeAwareText(answer, messageIndex, counter))
   }
 
-  if (showRawOutput && content) {
+  if (showRawOutput && (content || message.thinking)) {
+    const rawOutput = [message.thinking ? `Thinking:\n${message.thinking}` : '', content].filter(Boolean).join('\n\n')
     output.push(`
       <details class="raw-output-block" ${message.streaming ? 'open' : ''}>
         <summary>原始输出</summary>
-        <pre>${escapeHtml(content)}</pre>
+        <pre>${escapeHtml(rawOutput)}</pre>
       </details>
     `)
   }
@@ -736,6 +739,9 @@ function renderMessageMeta(message) {
     latencyMs ? `<span>◷ ${(latencyMs / 1000).toFixed(1)}s</span>` : '<span>◷ 0.0s</span>',
     speed ? `<span>⌁ ${escapeHtml(speed)}</span>` : '',
     message.streaming ? '<span>生成中</span>' : '',
+    message.state === 'cancelling' ? '<span class="message-state cancelling">正在停止</span>' : '',
+    message.state === 'cancelled' ? '<span class="message-state cancelled">已停止 · 不会加入上下文</span>' : '',
+    message.state === 'failed' ? '<span class="message-state failed">生成失败 · 不会加入上下文</span>' : '',
   ].filter(Boolean)
 
   return pieces.length ? `<div class="message-meta">${pieces.join('')}</div>` : ''
@@ -1127,6 +1133,7 @@ function renderModelInfoModal() {
 }
 
 function renderChat() {
+  const cancelling = Boolean(assistantForRequest(state.streamRequestId)?.cancelRequested)
   const messages = state.chatMessages.length
     ? state.chatMessages
         .map((message, index) => {
@@ -1177,9 +1184,9 @@ function renderChat() {
             <span class="model-chip-icon">${renderModelChipIcon()}</span>
             <span class="model-chip-label">${escapeHtml(modelName())}</span>
           </button>
-          <button class="send-btn" type="button" data-action="send-chat" ${state.chatBusy ? 'disabled' : ''}>
-            ${state.chatBusy ? '...' : '↑'}
-          </button>
+          ${state.chatBusy
+            ? `<button class="send-btn stop-chat" type="button" data-action="cancel-chat" title="停止生成" aria-label="停止生成" ${cancelling ? 'disabled' : ''}><span class="stop-icon"></span></button>`
+            : '<button class="send-btn" type="button" data-action="send-chat" title="发送" aria-label="发送">↑</button>'}
         </div>
         <div class="composer-hint">按住 Enter 发送，Shift + Enter 换行</div>
       </div>
@@ -1728,11 +1735,15 @@ function applyStreamDelta(payload) {
     last.content = `${last.content || ''}${payload.delta}`
     updateMessageDom(lastIndex)
   }
+  if (payload.thinkingDelta) {
+    last.thinking = `${last.thinking || ''}${payload.thinkingDelta}`
+    updateMessageDom(lastIndex)
+  }
   if (payload.done) {
     last.content = payload.content || last.content || '模型返回了空内容。'
+    last.thinking = payload.thinking || last.thinking || ''
     updateLiveStats(last)
     last.streaming = false
-    state.streamRequestId = ''
     saveCurrentSession()
     updateMessageDom(lastIndex)
   }
@@ -1798,17 +1809,15 @@ async function openModelInfo() {
   render({ preserveChatScroll: true })
 }
 
-async function sendChat() {
-  const content = state.chatInput.trim()
-  if ((!content && state.attachments.length === 0) || state.chatBusy) return
+function makeChatRequestId() {
+  return `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
 
-  if (!state.currentSessionId) state.currentSessionId = makeSessionId()
-  const attachments = state.attachments
-  state.chatMessages.push({ role: 'user', content, attachments, createdAt: Date.now() })
-  const requestId = `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`
-  state.chatMessages.push({
+function createPendingAssistant(requestId) {
+  const assistant = {
     role: 'assistant',
     content: '',
+    thinking: '',
     createdAt: Date.now(),
     startedAt: Date.now(),
     model: modelName(),
@@ -1817,7 +1826,61 @@ async function sendChat() {
     latencyMs: 0,
     speed: '',
     streaming: true,
-  })
+  }
+  assistant.requestId = requestId
+  return assistant
+}
+
+function assistantForRequest(requestId) {
+  if (!requestId) return null
+  return state.chatMessages.find(message => message.role === 'assistant' && message.requestId === requestId) || null
+}
+
+function markAssistantFailed(requestId, error, retry = false) {
+  const assistant = assistantForRequest(requestId)
+  if (!assistant) return
+  const errorText = String(error?.message || error || '')
+  const cancelled = Boolean(assistant.cancelRequested) || /cancelled|canceled|request cancelled/i.test(errorText)
+  const displayError = friendlyErrorMessage(error).replace(/^发送失败/, retry ? '重试失败' : '发送失败')
+  assistant.streaming = false
+  assistant.localOnly = true
+  assistant.state = cancelled ? 'cancelled' : 'failed'
+  assistant.error = displayError
+  if (!assistant.content && !assistant.thinking) {
+    assistant.content = cancelled ? '已停止生成。' : displayError
+  }
+}
+
+async function cancelChat() {
+  const requestId = state.streamRequestId
+  const assistant = assistantForRequest(requestId)
+  if (!state.chatBusy || !requestId || !assistant || assistant.cancelRequested) return
+  assistant.cancelRequested = true
+  assistant.state = 'cancelling'
+  render({ preserveChatScroll: true })
+  try {
+    const result = await window.llamaDesktop.cancelChat(requestId)
+    if (!result?.ok && state.chatBusy) {
+      assistant.cancelRequested = false
+      assistant.state = ''
+      setToast('当前请求已结束，无法停止')
+    }
+  } catch (error) {
+    assistant.cancelRequested = false
+    assistant.state = ''
+    setToast(error?.message || String(error))
+  }
+}
+
+async function sendChat() {
+  const content = state.chatInput.trim()
+  if ((!content && state.attachments.length === 0) || state.chatBusy) return
+
+  if (!state.currentSessionId) state.currentSessionId = makeSessionId()
+  const attachments = state.attachments
+  state.chatMessages.push({ role: 'user', content, attachments, createdAt: Date.now() })
+  const requestId = makeChatRequestId()
+  state.chatMessages.push(createPendingAssistant(requestId))
   state.streamRequestId = requestId
   state.chatInput = ''
   state.attachments = []
@@ -1837,23 +1900,21 @@ async function sendChat() {
     const latencyMs = Math.round(performance.now() - startedAt)
     const tokens = result.raw?.usage?.total_tokens || result.raw?.usage?.completion_tokens || ''
     const speed = tokens && latencyMs ? `${(Number(tokens) / (latencyMs / 1000)).toFixed(2)} t/s` : ''
-    const assistant = state.chatMessages[state.chatMessages.length - 1]
+    const assistant = assistantForRequest(requestId)
     if (assistant?.role === 'assistant') {
       const estimatedTokens = estimateTokens(assistant.content || result.content)
       assistant.content = result.content || assistant.content || '模型返回了空内容。'
+      assistant.thinking = result.thinking || assistant.thinking || ''
       assistant.tokens = tokens || estimatedTokens
       assistant.estimatedTokens = estimatedTokens
       assistant.latencyMs = latencyMs
       assistant.speed = speed || (assistant.tokens ? `${(Number(assistant.tokens) / (latencyMs / 1000)).toFixed(2)} t/s` : '')
       assistant.streaming = false
+      assistant.state = ''
     }
     saveCurrentSession()
   } catch (error) {
-    const assistant = state.chatMessages[state.chatMessages.length - 1]
-    if (assistant?.role === 'assistant' && !assistant.content) {
-      state.chatMessages.pop()
-    }
-    state.chatMessages.push({ role: 'system', content: friendlyErrorMessage(error), createdAt: Date.now(), localOnly: true })
+    markAssistantFailed(requestId, error)
     saveCurrentSession()
   } finally {
     state.chatBusy = false
@@ -1877,19 +1938,8 @@ async function retryMessage(index) {
 
   const userMessage = state.chatMessages[previousUserIndex]
   state.chatMessages = state.chatMessages.slice(0, index)
-  const requestId = `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`
-  state.chatMessages.push({
-    role: 'assistant',
-    content: '',
-    createdAt: Date.now(),
-    startedAt: Date.now(),
-    model: modelName(),
-    tokens: 0,
-    estimatedTokens: 0,
-    latencyMs: 0,
-    speed: '',
-    streaming: true,
-  })
+  const requestId = makeChatRequestId()
+  state.chatMessages.push(createPendingAssistant(requestId))
   state.streamRequestId = requestId
   state.chatBusy = true
   render()
@@ -1904,23 +1954,21 @@ async function retryMessage(index) {
     const latencyMs = Math.round(performance.now() - startedAt)
     const tokens = result.raw?.usage?.total_tokens || result.raw?.usage?.completion_tokens || ''
     const speed = tokens && latencyMs ? `${(Number(tokens) / (latencyMs / 1000)).toFixed(2)} t/s` : ''
-    const assistant = state.chatMessages[state.chatMessages.length - 1]
+    const assistant = assistantForRequest(requestId)
     if (assistant?.role === 'assistant') {
       const estimatedTokens = estimateTokens(assistant.content || result.content)
       assistant.content = result.content || assistant.content || `基于“${userMessage.content}”重试后，模型返回了空内容。`
+      assistant.thinking = result.thinking || assistant.thinking || ''
       assistant.tokens = tokens || estimatedTokens
       assistant.estimatedTokens = estimatedTokens
       assistant.latencyMs = latencyMs
       assistant.speed = speed || (assistant.tokens ? `${(Number(assistant.tokens) / (latencyMs / 1000)).toFixed(2)} t/s` : '')
       assistant.streaming = false
+      assistant.state = ''
     }
     saveCurrentSession()
   } catch (error) {
-    const assistant = state.chatMessages[state.chatMessages.length - 1]
-    if (assistant?.role === 'assistant' && !assistant.content) {
-      state.chatMessages.pop()
-    }
-    state.chatMessages.push({ role: 'system', content: friendlyErrorMessage(error).replace(/^发送失败/, '重试失败'), createdAt: Date.now(), localOnly: true })
+    markAssistantFailed(requestId, error, true)
     saveCurrentSession()
   } finally {
     state.chatBusy = false
@@ -2244,6 +2292,7 @@ appEl.addEventListener('click', event => {
   if (action === 'stop') void stop()
   if (action === 'health') void health()
   if (action === 'send-chat') void sendChat()
+  if (action === 'cancel-chat') void cancelChat()
 })
 
 appEl.addEventListener('input', event => {

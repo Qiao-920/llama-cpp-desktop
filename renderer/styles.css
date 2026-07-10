@@ -1697,6 +1697,33 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
   bottom: 14px;
 }
 
+.send-btn.stop-chat {
+  background: #b33b32;
+}
+
+.send-btn.stop-chat:hover:not(:disabled) {
+  background: #902f29;
+}
+
+.stop-icon {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 1px;
+  background: #fff;
+}
+
+.message-meta .message-state.failed,
+.message-meta .message-state.cancelled {
+  color: #8d2d27;
+  background: #f8e9e7;
+}
+
+.message-meta .message-state.cancelling {
+  color: #6b531a;
+  background: #f7f0d8;
+}
+
 @media (max-width: 1460px) {
   .service-bar {
     align-items: flex-start;

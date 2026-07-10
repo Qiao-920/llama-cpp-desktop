@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('llamaDesktop', {
   testHealth: payload => ipcRenderer.invoke('llama:test-health', payload),
   chatCompletion: payload => ipcRenderer.invoke('llama:chat-completion', payload),
   streamChat: payload => ipcRenderer.invoke('llama:chat-stream', payload),
+  cancelChat: requestId => ipcRenderer.invoke('llama:cancel-chat', { requestId }),
   getModelInfo: payload => ipcRenderer.invoke('llama:get-model-info', payload),
   pickFile: options => ipcRenderer.invoke('llama:pick-file', options?.properties ? options : { filters: options }),
   pickAttachments: payload => ipcRenderer.invoke('llama:pick-attachments', payload),
