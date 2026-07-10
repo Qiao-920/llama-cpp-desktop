@@ -509,6 +509,7 @@ button {
   position: fixed;
   z-index: 120;
   width: 206px;
+  max-width: max(0px, calc(100vw - 16px));
   top: auto;
   bottom: auto;
   left: auto;
