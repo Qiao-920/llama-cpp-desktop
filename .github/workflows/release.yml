@@ -17,6 +17,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate release version contract
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $tag = $env:RELEASE_TAG
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Release tag must use strict semver vX.Y.Z; received $tag"
+          }
+
+          $package = Get-Content -Raw -LiteralPath package.json | ConvertFrom-Json
+          $expectedTag = "v$($package.version)"
+          if ($tag -ne $expectedTag) {
+            throw "Release tag $tag does not match package.json version $($package.version)"
+          }
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -38,7 +54,18 @@ jobs:
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
-          name: Llama.cpp 桌面 ${{ github.ref_name }}
+          name: Llama.cpp Desktop ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            ## Assets
+            - `Llama.cpp-Desktop.exe`
+            - `Llama.cpp-Desktop.exe.sha256`
+
+            ## Known limitations
+            - Windows portable executable only. llama.cpp binaries, models, mmproj files, CUDA, and Vulkan are not bundled.
+
+            ## Configuration migration
+            - Existing user configuration, history, and runtime state are preserved. No migration is required.
           files: |
             dist/Llama.cpp-Desktop.exe
             dist/Llama.cpp-Desktop.exe.sha256

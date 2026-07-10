@@ -55,6 +55,26 @@ git diff --check
 npm run dist
 ```
 
+## Release Build Evidence
+
+```powershell
+npx electron-builder --publish never --config.directories.output=dist-spec-stabilization
+$exe = 'dist-spec-stabilization\Llama.cpp-Desktop.exe'
+(Get-Item -LiteralPath $exe).Length
+$hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+"$hash  Llama.cpp-Desktop.exe" | Set-Content 'dist-spec-stabilization\Llama.cpp-Desktop.exe.sha256' -Encoding ascii
+Get-FileHash -LiteralPath $exe -Algorithm SHA256
+git check-ignore -v dist-spec-stabilization
+```
+
+Result:
+```text
+Package path:
+Executable size:
+SHA256:
+Build output ignored:
+```
+
 结果：
 
 ```text
