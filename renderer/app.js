@@ -1,5 +1,7 @@
 ﻿import { runtimeWarnings } from '../desktop/lib/runtime-policy.mjs'
 
+import { isImportantRuntimeLine } from '../desktop/lib/log-pipeline.mjs'
+
 import {
   attachmentMenuPosition,
   attachmentNotice,
@@ -37,7 +39,7 @@ const state = {
   validation: {},
   launch: {},
   status: { state: 'stopped', message: '服务未启动', url: 'http://127.0.0.1:8080' },
-  logs: [],
+  logs: { entries: [], filtered: 0, truncated: 0, dropped: 0 },
   view: 'chat',
   sidebarPanel: 'chats',
   sidebarCollapsed: false,
@@ -758,57 +760,17 @@ function renderMessageMeta(message) {
   return pieces.length ? `<div class="message-meta">${pieces.join('')}</div>` : ''
 }
 
-function compactLogLineForDisplay(line) {
-  const text = String(line || '').trim()
-  const lower = text.toLowerCase()
-  const routinePatterns = [
-    'que start_loop: waiting for new tasks',
-    'que start_loop: processing new tasks',
-    'srv update_slots: all slots are idle',
-    'srv update_slots: run slots completed',
-    'srv update_slots: update slots',
-  ]
-
-  if (routinePatterns.some(pattern => lower.includes(pattern))) return ''
-  if (lower.includes('http: streamed chunk: data:') && !lower.includes('[done]')) return ''
-  if (lower.includes('http: streamed chunk: data: [done]')) return 'stream chunk: [DONE]'
-  if (text.includes('"prompt":') || text.includes('<|im_start|>') || text.includes('<!DOCTYPE html')) {
-    return `[已省略超长日志负载：${text.length} 字符]`
-  }
-  if (text.length > 420) return `${text.slice(0, 260)} ... [已截断 ${text.length - 260} 字符]`
-  return text
+function logEntries() {
+  return Array.isArray(state.logs?.entries) ? state.logs.entries : []
 }
 
 function visibleLogs(limit = 420) {
-  return (state.logs || [])
-    .map(entry => ({ ...entry, line: compactLogLineForDisplay(entry.line) }))
-    .filter(entry => entry.line)
-    .slice(-limit)
-}
-
-function terminalLineForDisplay(entry) {
-  const line = compactLogLineForDisplay(entry?.line)
-  if (!line) return ''
-
-  const source = String(entry?.source || '').toLowerCase()
-  const lower = line.toLowerCase()
-  const runtimePrefix = /^(llama_|load_|clip_|common_|sched_|ggml|cuda|cublas|main:|server|srv\b|srv_|slot|system_info|webui|error|warn|warning|fatal)/i
-
-  if (source === 'chat') return ''
-  if (lower.includes('parsed message:')) return ''
-  if (lower.includes('"role":"assistant"') || lower.includes('"role":"user"')) return ''
-  if (line.includes('<|im_start|>') || line.includes('<!DOCTYPE html')) return ''
-  if (runtimePrefix.test(line)) return line
-  if (lower.includes('server is listening') || lower.includes('listening on') || lower.includes('model loaded')) return line
-  if (source === 'desktop' && !lower.includes('prompt')) return line
-
-  return ''
+  return logEntries().slice(-limit)
 }
 
 function visibleTerminalLogs(limit = 520) {
-  return (state.logs || [])
-    .map(entry => terminalLineForDisplay(entry))
-    .filter(Boolean)
+  return logEntries()
+    .filter(entry => entry.source === 'desktop' || isImportantRuntimeLine(entry.line))
     .slice(-limit)
 }
 
@@ -992,10 +954,10 @@ function renderAttachmentChips(attachments, removable, role = 'composer') {
 
 function renderTerminalPanel() {
   const logs = visibleTerminalLogs()
-  const hiddenCount = Math.max(0, (state.logs || []).length - logs.length)
   const logRows = logs.length
-    ? logs.map(line => `<div class="terminal-line">${escapeHtml(line)}</div>`).join('')
+    ? logs.map(entry => `<div class="terminal-line">${escapeHtml(entry.line)}</div>`).join('')
     : '<div class="terminal-line terminal-muted">Waiting for llama.cpp server output...</div>'
+  const stats = state.logs || {}
 
   return `
     <section class="terminal-screen">
@@ -1007,8 +969,10 @@ function renderTerminalPanel() {
         <button type="button" class="outline-btn" data-action="return-chat">回到聊天</button>
       </div>
       <div class="terminal-summary">
-        <span>正常终端视图：只显示 llama.cpp/server/runtime 输出。</span>
-        ${hiddenCount ? `<strong>已隐藏 ${hiddenCount} 条聊天回显、JSON chunk、prompt 或轮询日志。</strong>` : ''}
+        <span>正常终端视图：只显示 llama.cpp/server/runtime 输出，最多 520 行。</span>
+        <strong class="log-stat">已过滤 ${Number(stats.filtered || 0)} 条噪音日志</strong>
+        <strong class="log-stat">已截断 ${Number(stats.truncated || 0)} 条长日志</strong>
+        <strong class="log-stat">已丢弃 ${Number(stats.dropped || 0)} 条超出 1200 行容量的日志</strong>
       </div>
       <div class="terminal-console" id="inlineLogBox">${logRows}</div>
     </section>
@@ -1714,7 +1678,8 @@ function patchFromBackend(payload) {
   if (payload.chatCompletionsUrl) state.chatCompletionsUrl = payload.chatCompletionsUrl
   if (payload.validation) state.validation = payload.validation
   if (payload.status) state.status = payload.status
-  if (payload.logs) state.logs = payload.logs
+  if (Array.isArray(payload.logs)) state.logs = { ...state.logs, entries: payload.logs }
+  if (payload.logStats) state.logs = { ...state.logs, ...payload.logStats }
   if (payload.launch) state.launch = payload.launch
   state.dirty = false
 }
@@ -2364,7 +2329,8 @@ async function init() {
       return
     }
     if (payload.type === 'logs') {
-      state.logs = payload.logs
+      if (Array.isArray(payload.logs)) state.logs = { ...state.logs, entries: payload.logs }
+      if (payload.logStats) state.logs = { ...state.logs, ...payload.logStats }
       if (state.view === 'terminal') render({ preserveChatScroll: true })
       return
     }

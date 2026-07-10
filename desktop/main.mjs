@@ -5,6 +5,7 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildRequestMessages, createRequestRegistry, extractStreamDelta, normalizeChatTemplateKwargs } from './lib/chat-pipeline.mjs'
+import { appendVisibleLogs, processLogChunk } from './lib/log-pipeline.mjs'
 import { DEFAULT_HOST, assertNoCoreArgConflicts, assertStartableServerConfig, runtimeWarnings, serviceUrls, splitExtraArgs } from './lib/runtime-policy.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -31,7 +32,7 @@ let runtimeStatus = {
   url: 'http://127.0.0.1:8080',
   startedAt: null,
 }
-let logs = []
+let logs = { entries: [], filtered: 0, truncated: 0, dropped: 0 }
 const requestRegistry = createRequestRegistry()
 
 function defaultBaseDir() {
@@ -149,70 +150,20 @@ function setStatus(next) {
   updateTrayMenu()
 }
 
-function stripAnsi(value) {
-  return String(value || '')
-    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/\[[0-9;]*m/g, '')
-}
-
-function compactLogLine(source, line) {
-  const text = String(line || '').trim()
-  const lower = text.toLowerCase()
-  const isError = lower.includes('error') || lower.includes('fail') || lower.includes('exception')
-  const routinePatterns = [
-    'que start_loop: waiting for new tasks',
-    'que start_loop: processing new tasks',
-    'srv update_slots: all slots are idle',
-    'srv update_slots: run slots completed',
-    'srv update_slots: update slots',
-  ]
-
-  if (!isError && routinePatterns.some(pattern => lower.includes(pattern))) {
-    return null
-  }
-
-  if (lower.includes('http: streamed chunk: data:')) {
-    if (lower.includes('[done]')) {
-      return 'stream chunk: [DONE]'
-    }
-    return null
-  }
-
-  if (!isError && (
-    lower.startsWith('parsed message:') ||
-    lower.startsWith('parsed chat message:') ||
-    lower.startsWith('response:') ||
-    lower.startsWith('assistant:') ||
-    lower.startsWith('prompt:') ||
-    text.includes('"prompt":') ||
-    text.includes('<|im_start|>') ||
-    text.includes('<!DOCTYPE html')
-  )) {
-    return null
-  }
-
-  if (text.length > 420) {
-    return `${text.slice(0, 260)} ... [truncated ${text.length - 260} chars]`
-  }
-
-  return text
+function logStats() {
+  const { filtered, truncated, dropped } = logs
+  return { filtered, truncated, dropped }
 }
 
 function addLog(source, chunk) {
-  const text = stripAnsi(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk))
-  const entries = text
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .filter(line => line.trim().length > 0)
-    .map(line => compactLogLine(source, line))
-    .filter(Boolean)
-    .map(line => ({ at: new Date().toISOString(), source, line }))
+  const result = processLogChunk(source, chunk)
+  const entries = result.entries.map(entry => ({ ...entry, at: new Date().toISOString() }))
+  logs = appendVisibleLogs({
+    ...logs,
+    filtered: logs.filtered + result.filtered,
+    truncated: logs.truncated + result.truncated,
+  }, entries, 1200)
 
-  if (entries.length === 0) {
-    return
-  }
-
-  logs = [...logs, ...entries].slice(-1200)
   for (const entry of entries) {
     if (entry.line.includes('server is listening')) {
       setStatus({ state: 'running', message: '服务正在监听', pid: serverChild?.pid || null })
@@ -221,7 +172,7 @@ function addLog(source, chunk) {
       setStatus({ message: entry.line })
     }
   }
-  sendEvent({ type: 'logs', logs })
+  sendEvent({ type: 'logs', logs: logs.entries, logStats: logStats() })
 }
 
 function stripTomlComment(line) {
@@ -793,7 +744,8 @@ async function appState() {
     configWarnings: runtimeWarnings(config),
     ...serviceUrls(config),
     status: runtimeStatus,
-    logs,
+    logs: logs.entries,
+    logStats: logStats(),
     validation: validation(config),
     launch: buildLaunchDetails(config),
   }
@@ -959,7 +911,7 @@ function registerIpc() {
       throw new Error(launch.error)
     }
 
-    logs = []
+    logs = { entries: [], filtered: 0, truncated: 0, dropped: 0 }
     stoppingServer = false
     setStatus({
       state: 'starting',

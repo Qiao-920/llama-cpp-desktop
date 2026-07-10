@@ -2007,6 +2007,10 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
   font-weight: 700;
 }
 
+.terminal-summary .log-stat {
+  white-space: nowrap;
+}
+
 .terminal-row {
   display: grid;
   grid-template-columns: 92px 72px minmax(0, 1fr);

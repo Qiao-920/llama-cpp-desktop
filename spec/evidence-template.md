@@ -73,6 +73,15 @@ npm run dist
 | 终端日志 | 1365x768 |  |  |
 | 设置页 | 1365x768 |  |  |
 
+## 终端过滤证据
+
+| 过滤项 | 输入或触发方式 | 日志计数/截图 | 结论 |
+| --- | --- | --- | --- |
+| 流式 JSON chunk | `http: streamed chunk: data:` |  |  |
+| Prompt 回显 | 完整 prompt 或 `<|im_start|>` |  |  |
+| HTML/CSS/JS 代码回显 | 长代码或 HTML 输出 |  |  |
+| 空闲轮询 | `que start_loop: waiting for new tasks` |  |  |
+
 ## 请求证据
 
 | 项 | 结论 | 证据 |
@@ -104,6 +113,7 @@ npm run dist
 | D-04 |  |  |
 | E-01 |  |  |
 | E-02 |  |  |
+| E-03 |  |  |
 | E-05 |  |  |
 | F-01 |  |  |
 | F-03 |  |  |
@@ -123,4 +133,3 @@ npm run dist
 - [ ] 不可以
 
 原因：
-
