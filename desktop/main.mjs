@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DEFAULT_HOST, assertNoCoreArgConflicts, runtimeWarnings, serviceUrls } from './lib/runtime-policy.mjs'
+import { DEFAULT_HOST, assertNoCoreArgConflicts, assertStartableServerConfig, runtimeWarnings, serviceUrls, splitExtraArgs } from './lib/runtime-policy.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -516,48 +516,6 @@ function hasValue(value) {
   return value !== undefined && value !== null && String(value).trim() !== ''
 }
 
-function splitExtraArgs(raw) {
-  const text = String(raw || '').replace(/\r?\n/g, ' ').trim()
-  if (!text) {
-    return []
-  }
-
-  const args = []
-  let current = ''
-  let quote = ''
-
-  for (const char of text) {
-    if (quote) {
-      if (char === quote) {
-        quote = ''
-      } else {
-        current += char
-      }
-      continue
-    }
-    if (char === '"' || char === "'") {
-      quote = char
-      continue
-    }
-    if (/\s/.test(char)) {
-      if (current) {
-        args.push(current)
-        current = ''
-      }
-      continue
-    }
-    current += char
-  }
-
-  if (quote) {
-    throw new Error('自定义附加参数里有未闭合的引号')
-  }
-  if (current) {
-    args.push(current)
-  }
-  return args
-}
-
 function pushArg(args, flag, value) {
   if (hasValue(value)) {
     args.push(flag, String(value))
@@ -1033,18 +991,10 @@ function registerIpc() {
       return appState()
     }
 
-    const config = await saveConfig(payload.config)
-    assertNoCoreArgConflicts(config.extra_args)
+    const config = normalizeConfig(payload.config)
+    assertStartableServerConfig(config, existsSync)
+    await saveConfig(config)
     const directMode = config.launch_mode !== 'launcher'
-    if (!directMode && !existsSync(config.launcher_path)) {
-      throw new Error(`找不到启动器：${config.launcher_path}`)
-    }
-    if (!existsSync(config.llama_server_path)) {
-      throw new Error(`找不到 llama-server.exe：${config.llama_server_path}`)
-    }
-    if (!existsSync(config.model)) {
-      throw new Error(`找不到模型文件：${config.model}`)
-    }
     const launch = buildLaunchDetails(config)
     if (launch.error) {
       throw new Error(launch.error)

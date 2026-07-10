@@ -1,4 +1,6 @@
-﻿const sections = [
+﻿import { runtimeWarnings } from '../desktop/lib/runtime-policy.mjs'
+
+const sections = [
   ['chat', '对话', '桌面端直接使用模型'],
   ['paths', '路径', '启动器、配置文件和服务端'],
   ['model', '模型', 'GGUF 与多模态投影'],
@@ -856,8 +858,17 @@ function field(name, label, options = {}) {
 }
 
 function configWarning(id) {
-  const warning = (state.configWarnings || []).find(item => item.id === id)
-  return warning ? `<div class="settings-callout" role="alert">${escapeHtml(warning.message)}</div>` : ''
+  const warning = runtimeWarnings(state.config).find(item => item.id === id)
+  return `<div class="settings-callout" data-config-warning="${escapeAttribute(id)}" role="alert" ${warning ? '' : 'hidden'}>${warning ? escapeHtml(warning.message) : ''}</div>`
+}
+
+function refreshConfigWarnings() {
+  const warnings = runtimeWarnings(state.config)
+  for (const element of appEl.querySelectorAll('[data-config-warning]')) {
+    const warning = warnings.find(item => item.id === element.dataset.configWarning)
+    element.hidden = !warning
+    element.textContent = warning?.message || ''
+  }
 }
 
 function selectField(name, label, choices, hint = '') {
@@ -2263,6 +2274,7 @@ appEl.addEventListener('input', event => {
     state.config.llama_server_path = `${String(input.value || '').replace(/[\\/]+$/, '')}\\llama-server.exe`
   }
   state.dirty = true
+  refreshConfigWarnings()
 })
 
 appEl.addEventListener('keydown', event => {
