@@ -63,12 +63,35 @@ test('cancels only the matching active request', () => {
   registry.finish('second')
 })
 
-test('times out an active request and finish clears it', async () => {
+test('replacing a request id aborts the previous request before registering the new one', () => {
+  const registry = createRequestRegistry()
+  const first = registry.start('same-id', 600000)
+  const second = registry.start('same-id', 600000)
+
+  assert.equal(first.aborted, true)
+  assert.equal(first.reason?.name, 'AbortError')
+  assert.equal(second.aborted, false)
+  assert.equal(registry.cancel('same-id'), true)
+  assert.equal(second.aborted, true)
+  assert.equal(registry.cancel('same-id'), false)
+})
+
+test('finishing a superseded request does not unregister its replacement', () => {
+  const registry = createRequestRegistry()
+  const first = registry.start('same-id', 600000)
+  const second = registry.start('same-id', 600000)
+
+  assert.equal(registry.finish('same-id', first), false)
+  assert.equal(registry.cancel('same-id'), true)
+  assert.equal(second.aborted, true)
+})
+
+test('removes a timed-out request from the registry immediately', async () => {
   const registry = createRequestRegistry()
   const signal = registry.start('slow', 5)
   await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }))
+
   assert.equal(signal.aborted, true)
   assert.equal(signal.reason?.name, 'TimeoutError')
-  assert.equal(registry.finish('slow'), true)
   assert.equal(registry.cancel('slow'), false)
 })

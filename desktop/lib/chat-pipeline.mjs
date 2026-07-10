@@ -51,9 +51,9 @@ export function extractStreamDelta(payload = {}) {
 
 export function createRequestRegistry() {
   const active = new Map()
-  const finish = id => {
+  const finish = (id, signal) => {
     const current = active.get(id)
-    if (!current) return false
+    if (!current || (signal && current.controller.signal !== signal)) return false
     clearTimeout(current.timer)
     active.delete(id)
     return true
@@ -61,13 +61,21 @@ export function createRequestRegistry() {
 
   return {
     start(id, timeoutMs) {
-      finish(id)
+      const previous = active.get(id)
+      if (previous) {
+        previous.controller.abort(new DOMException('Request replaced', 'AbortError'))
+        finish(id)
+      }
+
       const controller = new AbortController()
       const duration = Math.max(0, Number(timeoutMs) || 600000)
-      const timer = setTimeout(() => {
+      const entry = { controller, timer: null }
+      entry.timer = setTimeout(() => {
+        if (active.get(id) !== entry) return
         controller.abort(new DOMException('Request timed out', 'TimeoutError'))
+        finish(id, controller.signal)
       }, duration)
-      active.set(id, { controller, timer })
+      active.set(id, entry)
       return controller.signal
     },
     cancel(id) {

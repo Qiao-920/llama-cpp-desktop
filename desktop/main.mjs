@@ -1117,7 +1117,7 @@ function registerIpc() {
       const { content, thinking } = extractStreamDelta(data)
       return { ok: true, content, thinking, raw: data }
     } finally {
-      requestRegistry.finish(requestId)
+      requestRegistry.finish(requestId, signal)
     }
   })
 
@@ -1212,7 +1212,7 @@ function registerIpc() {
     sendEvent({ type: 'chat-stream', requestId, done: true, content, thinking })
       return { ok: true, content, thinking, raw }
     } finally {
-      requestRegistry.finish(requestId)
+      requestRegistry.finish(requestId, signal)
     }
   })
 
