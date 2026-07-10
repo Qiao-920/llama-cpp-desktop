@@ -1,5 +1,7 @@
 ﻿import { runtimeWarnings } from '../desktop/lib/runtime-policy.mjs'
 
+import { ATTACHMENT_MENU_ITEMS, attachmentNotice } from './lib/attachment-policy.js'
+
 const sections = [
   ['chat', '对话', '桌面端直接使用模型'],
   ['paths', '路径', '启动器、配置文件和服务端'],
@@ -670,15 +672,16 @@ function attachmentLabel(kind) {
     system: '系统',
     mcp: 'MCP',
     file: '文件',
-    video: '视频',
   }[kind] || '文件'
 }
 
 function renderAttachmentItem(item, index, removable, mode = 'composer') {
   const kind = String(item?.kind || 'file')
   const name = String(item?.name || 'attachment')
-  const meta = [formatBytes(item.size || 0), item.warning || item.error || ''].filter(Boolean).join(' · ')
-  const title = [name, item.path || '', meta].filter(Boolean).join('\n')
+  const notice = attachmentNotice(item)
+  const noticeClass = item?.error ? 'error' : 'warning'
+  const meta = formatBytes(item.size || 0)
+  const title = [name, item.path || '', meta, notice].filter(Boolean).join('\n')
   const removeButton = removable
     ? `<button type="button" class="attachment-remove" data-action="remove-attachment" data-index="${index}" title="移除附件">×</button>`
     : ''
@@ -700,6 +703,7 @@ function renderAttachmentItem(item, index, removable, mode = 'composer') {
         <figcaption>
           <strong>${escapeHtml(name)}</strong>
           <span>${escapeHtml(meta)}</span>
+          ${notice ? `<span class="attachment-notice ${noticeClass}">${escapeHtml(notice)}</span>` : ''}
         </figcaption>
         ${removeButton}
       </figure>
@@ -709,7 +713,10 @@ function renderAttachmentItem(item, index, removable, mode = 'composer') {
   return `
     <span class="attachment-chip ${escapeHtml(kind)} ${mode === 'message-user' ? 'message-file' : ''}" title="${escapeAttribute(title)}">
       <strong>${attachmentLabel(kind)}</strong>
-      <span class="attachment-name">${escapeHtml(name)}</span>
+      <span class="attachment-details">
+        <span class="attachment-name">${escapeHtml(name)}</span>
+        ${notice ? `<span class="attachment-notice ${noticeClass}">${escapeHtml(notice)}</span>` : ''}
+      </span>
       <span class="attachment-size">${escapeHtml(formatBytes(item.size || 0))}</span>
       ${removeButton}
     </span>
@@ -1195,14 +1202,18 @@ function renderChat() {
 }
 
 function attachmentMenuItems() {
-  return `
-    <button type="button" data-action="pick-image"><span class="menu-icon image"></span>图片</button>
-    <button type="button" disabled title="暂不支持视频理解"><span class="menu-icon video"></span>视频文件</button>
-    <button type="button" data-action="pick-audio"><span class="menu-icon audio"></span>音频文件</button>
-    <button type="button" data-action="pick-text"><span class="menu-icon text"></span>文本文件</button>
-    <button type="button" data-action="pick-pdf"><span class="menu-icon pdf"></span>PDF 文件</button>
-    <button type="button" data-action="insert-system-message"><span class="menu-icon system"></span>系统消息</button>
-  `
+  return ATTACHMENT_MENU_ITEMS.map(item => {
+    const action = item.id === 'system' ? 'insert-system-message' : `pick-${item.id}`
+    const disabled = item.enabled ? '' : 'disabled'
+    const actionAttribute = item.enabled ? `data-action="${action}"` : ''
+    const reason = item.reason ? `<span class="menu-reason">${escapeHtml(item.reason)}</span>` : ''
+    return `
+      <button type="button" ${actionAttribute} ${disabled}>
+        <span class="menu-icon ${escapeHtml(item.id)}"></span>
+        <span class="menu-copy"><span>${escapeHtml(item.label)}</span>${reason}</span>
+      </button>
+    `
+  }).join('')
 }
 
 function renderAttachmentMenuPortal() {
@@ -1220,15 +1231,18 @@ function renderAttachmentMenuPortal() {
 function openAttachmentMenu(button) {
   const rect = button.getBoundingClientRect()
   const menuWidth = 206
-  const menuHeight = 252
+  const menuHeight = 304
   const gap = 8
-  const minPad = 12
-  const left = Math.min(Math.max(rect.left, minPad), window.innerWidth - menuWidth - minPad)
+  const minPad = 8
+  const maxLeft = Math.max(minPad, window.innerWidth - menuWidth - minPad)
+  const maxTop = Math.max(minPad, window.innerHeight - menuHeight - minPad)
+  const left = Math.min(Math.max(rect.left, minPad), maxLeft)
   const below = rect.bottom + gap
   const above = rect.top - menuHeight - gap
-  const top = below + menuHeight < window.innerHeight - minPad
+  const preferredTop = below + menuHeight <= window.innerHeight - minPad || above < minPad
     ? below
-    : Math.max(minPad, above)
+    : above
+  const top = Math.min(Math.max(preferredTop, minPad), maxTop)
 
   state.attachmentMenuOpen = true
   state.attachmentMenuPosition = {
