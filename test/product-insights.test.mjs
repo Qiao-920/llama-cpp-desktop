@@ -84,6 +84,47 @@ test('terminal diagnosis summarizes status, risk, and next action from state and
   )
 })
 
+test('terminal diagnosis covers running, noisy, hidden, and empty terminal states', () => {
+  const running = terminalDiagnosis({
+    status: { state: 'running', message: 'ready at http://127.0.0.1:8080' },
+    logs: { entries: [{ line: 'server ready' }], dropped: 0, truncated: 0 },
+    terminalView: { entries: [{ line: 'server ready' }], hidden: 0, excluded: 0 },
+  })
+  assert.equal(running.label, '运行中')
+  assert.equal(running.risk, 'good')
+  assert.match(running.detail, /ready at http:\/\/127\.0\.0\.1:8080/)
+  assert.match(running.detail, /1 条运行日志/)
+
+  const noisy = terminalDiagnosis({
+    status: { state: 'running', message: 'ready' },
+    logs: { entries: [{ line: 'server ready' }], dropped: 3, truncated: 2 },
+    terminalView: { entries: [{ line: 'server ready' }], hidden: 0, excluded: 14 },
+  })
+  assert.equal(noisy.risk, 'warning')
+  assert.match(noisy.detail, /已排除 14 条/)
+  assert.match(noisy.detail, /丢弃 3 条/)
+  assert.match(noisy.detail, /截断 2 条/)
+
+  const hidden = terminalDiagnosis({
+    status: { state: 'starting', message: '' },
+    logs: { entries: [{ line: 'loading model' }], dropped: 0, truncated: 0 },
+    terminalView: { entries: [{ line: 'loading model' }], hidden: 520, excluded: 1 },
+  })
+  assert.equal(hidden.label, '启动中')
+  assert.equal(hidden.risk, 'normal')
+  assert.match(hidden.detail, /已隐藏 520 条/)
+
+  const empty = terminalDiagnosis({
+    status: { state: 'stopped', message: '' },
+    logs: { entries: [] },
+    terminalView: { entries: [], hidden: 0, excluded: 0 },
+  })
+  assert.equal(empty.label, '未运行')
+  assert.equal(empty.risk, 'warning')
+  assert.equal(empty.nextAction, '确认配置后启动服务。')
+  assert.match(empty.detail, /0 条运行日志/)
+})
+
 test('session budget reports configured context and approximate used tokens', () => {
   const budget = sessionBudget({
     config: { ctx_size: 4096 },
@@ -148,6 +189,16 @@ test('chat and model info surfaces include Task 2 product sections', async () =>
   assert.match(source, /modelCapability/)
   assert.match(source, /运行检查/)
   assert.match(source, /模型能力/)
+})
+
+test('terminal panel surfaces diagnostic summary and copy export action', async () => {
+  const source = await readFile(new URL('../renderer/app.js', import.meta.url), 'utf8')
+
+  assert.match(source, /terminalDiagnosis/)
+  assert.match(source, /diagnosticBundleText/)
+  assert.match(source, /data-action="copy-terminal-diagnostics"/)
+  assert.match(source, /诊断摘要/)
+  assert.match(source, /原始日志明细/)
 })
 
 test('diagnostic bundle emits compact Chinese text with status, endpoint, model basename, log stats, and recent terminal lines', () => {

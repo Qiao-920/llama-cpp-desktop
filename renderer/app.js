@@ -9,8 +9,10 @@ import {
   renderAttachmentNotice,
 } from './lib/attachment-policy.js'
 import {
+  diagnosticBundleText,
   modelCapability,
   readinessChecklist,
+  terminalDiagnosis,
 } from './lib/product-insights.js'
 
 const sections = [
@@ -1031,6 +1033,10 @@ function renderTerminalPanel() {
     ? logs.map(entry => `<div class="terminal-line">${escapeHtml(entry.line)}</div>`).join('')
     : '<div class="terminal-line terminal-muted">Waiting for llama.cpp server output...</div>'
   const stats = state.logs || {}
+  const diagnosis = terminalDiagnosis({ status: state.status, logs: state.logs, terminalView })
+  const lastMeaningfulEvent = logs.length
+    ? logs[logs.length - 1].line
+    : state.status?.message || '暂无终端输出'
 
   return `
     <section class="terminal-screen">
@@ -1041,6 +1047,24 @@ function renderTerminalPanel() {
         </div>
         <button type="button" class="outline-btn" data-action="return-chat">回到聊天</button>
       </div>
+      <div class="terminal-diagnostic terminal-diagnostic-${escapeAttribute(diagnosis.risk)}">
+        <div class="terminal-diagnostic-main">
+          <span>诊断摘要</span>
+          <strong>${escapeHtml(diagnosis.label)}</strong>
+          <em>${escapeHtml(diagnosis.detail)}</em>
+        </div>
+        <div class="terminal-diagnostic-meta">
+          <div>
+            <span>最近事件</span>
+            <strong>${escapeHtml(lastMeaningfulEvent)}</strong>
+          </div>
+          <div>
+            <span>下一步</span>
+            <strong>${escapeHtml(diagnosis.nextAction)}</strong>
+          </div>
+        </div>
+        <button type="button" class="outline-btn small-btn" data-action="copy-terminal-diagnostics">复制诊断</button>
+      </div>
       <div class="terminal-summary">
         <span>正常终端视图：只显示 llama.cpp/server/runtime 输出，最多 520 行。</span>
         <strong class="log-stat">已过滤 ${Number(stats.filtered || 0)} 条噪音日志</strong>
@@ -1049,6 +1073,7 @@ function renderTerminalPanel() {
         <strong class="log-stat">终端视图已隐藏 ${terminalView.hidden} 条超出 520 行显示上限的日志</strong>
         <strong class="log-stat">主进程已丢弃 ${Number(stats.dropped || 0)} 条超出 1200 行存储容量的日志</strong>
       </div>
+      <div class="terminal-detail-label">原始日志明细</div>
       <div class="terminal-console" id="inlineLogBox">${logRows}</div>
     </section>
   `
@@ -2141,6 +2166,17 @@ appEl.addEventListener('click', event => {
   if (action === 'copy-model-info') {
     void navigator.clipboard.writeText(String(target.dataset.copy || ''))
     setToast('已复制到剪贴板')
+    return
+  }
+  if (action === 'copy-terminal-diagnostics') {
+    const text = diagnosticBundleText({
+      config: state.config,
+      status: state.status,
+      logs: state.logs,
+      terminalView: visibleTerminalLogs(),
+    })
+    void navigator.clipboard.writeText(text)
+    setToast('终端诊断已复制，可直接粘贴给排查人员')
     return
   }
   if (action === 'copy-launch-command') {

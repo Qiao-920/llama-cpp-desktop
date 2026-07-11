@@ -2066,6 +2066,77 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
   white-space: nowrap;
 }
 
+.terminal-diagnostic {
+  width: min(1050px, 94%);
+  margin: 0 auto 12px;
+  display: grid;
+  grid-template-columns: minmax(220px, 1.1fr) minmax(260px, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-left: 4px solid #8d9a88;
+  border-radius: 8px;
+  background: #fbfcfa;
+  padding: 12px 14px;
+}
+
+.terminal-diagnostic-good {
+  border-left-color: #4f7450;
+}
+
+.terminal-diagnostic-warning,
+.terminal-diagnostic-normal {
+  border-left-color: #b68a2a;
+}
+
+.terminal-diagnostic-high {
+  border-left-color: #b95050;
+}
+
+.terminal-diagnostic span,
+.terminal-detail-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.terminal-diagnostic strong,
+.terminal-diagnostic em {
+  display: block;
+}
+
+.terminal-diagnostic strong {
+  margin-top: 3px;
+  color: #293028;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.terminal-diagnostic em {
+  margin-top: 4px;
+  color: #5b6558;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.terminal-diagnostic-meta {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.terminal-diagnostic-meta strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-detail-label {
+  width: min(1050px, 94%);
+  margin: 0 auto 8px;
+  font-weight: 700;
+}
+
 .terminal-row {
   display: grid;
   grid-template-columns: 92px 72px minmax(0, 1fr);
@@ -2369,7 +2440,9 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
 }
 
 .terminal-screen .terminal-head,
+.terminal-screen .terminal-diagnostic,
 .terminal-screen .terminal-summary,
+.terminal-screen .terminal-detail-label,
 .terminal-screen .terminal-console {
   width: min(1180px, 94%);
 }
