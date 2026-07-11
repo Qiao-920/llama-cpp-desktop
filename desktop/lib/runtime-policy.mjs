@@ -1,5 +1,14 @@
 export const DEFAULT_HOST = '127.0.0.1'
 const CORE_ARGS = new Set(['--host', '--port', '--model', '--mmproj', '--ctx-size', '--n-gpu-layers', '--threads', '--batch-size', '--ubatch-size', '--chat-template-kwargs'])
+const CORE_ARG_ALIASES = new Map([
+  ['-c', '--ctx-size'],
+  ['-m', '--model'],
+  ['-t', '--threads'],
+  ['-b', '--batch-size'],
+  ['-ub', '--ubatch-size'],
+  ['-ngl', '--n-gpu-layers'],
+  ['--gpu-layers', '--n-gpu-layers'],
+])
 
 export function runtimeWarnings(config = {}) {
   const warnings = []
@@ -11,7 +20,8 @@ export function runtimeWarnings(config = {}) {
 
 export function assertNoCoreArgConflicts(extraArgs = '') {
   const conflicts = splitExtraArgs(extraArgs)
-    .map(arg => arg.match(/^(--[\w-]+)(?:=.*)?$/)?.[1])
+    .map(arg => arg.match(/^(-{1,2}[\w-]+)(?:=.*)?$/)?.[1])
+    .map(name => CORE_ARG_ALIASES.get(name) || name)
     .filter(name => CORE_ARGS.has(name))
   const unique = [...new Set(conflicts)]
   if (unique.length) throw new Error(`额外参数不能覆盖界面配置：${unique.join(', ')}`)

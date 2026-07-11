@@ -47,17 +47,21 @@ export function isImportantRuntimeLine(line) {
   if (isErrorLine(text)) return true
   return /^(?:llama_|load_|clip_|common_|sched_|ggml|cuda|cublas|main:|server|srv\b|srv_|slot|system_info|webui|warn|warning)/i.test(text) ||
     /\b(?:cpu|cuda\d*|metal)\b/i.test(text) ||
-    /\b(?:server is listening|server listening|listening on|model loaded|request (?:started|completed)|tokens per second)\b/i.test(text)
+    /\b(?:server is listening|server listening|listening on|model loaded|request (?:started|completed)|tokens per second)\b/i.test(text) ||
+    /^request .+: \d+ messages -> \S+$/i.test(text) ||
+    /^stream done: \d+ approx tokens, \d+(?:\.\d+)?s$/i.test(text)
 }
 
 export function selectVisibleTerminalLogs(entries, limit = 520) {
-  const displayable = (Array.isArray(entries) ? entries : [])
+  const stored = Array.isArray(entries) ? entries : []
+  const displayable = stored
     .filter(entry => entry?.source === 'desktop' || isImportantRuntimeLine(entry?.line))
   const maximum = Math.max(0, Number.isFinite(limit) ? Math.floor(limit) : 0)
   const hidden = Math.max(0, displayable.length - maximum)
 
   return {
     entries: maximum ? displayable.slice(-maximum) : [],
+    excluded: stored.length - displayable.length,
     hidden,
   }
 }

@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   appendVisibleLogs,
   createLogChunkBuffers,
@@ -9,6 +10,8 @@ import {
   processLogChunk,
   selectVisibleTerminalLogs,
 } from '../desktop/lib/log-pipeline.mjs'
+
+const rendererSource = readFileSync(new URL('../renderer/app.js', import.meta.url), 'utf8')
 
 test('filters streamed JSON, prompt, code echo, and idle polling', () => {
   const input = ['http: streamed chunk: data: {"choices":[]}', 'prompt: <|im_start|>user', '<div>echo</div>', 'body { color: red; }', 'const answer = 1;', 'que start_loop: waiting for new tasks'].join('\n')
@@ -32,21 +35,31 @@ test('tracks filtered truncated and capacity-dropped counts separately', () => {
 test('recognizes the runtime lines retained by the terminal', () => {
   assert.equal(isImportantRuntimeLine('CUDA0 ready'), true)
   assert.equal(isImportantRuntimeLine('server listening at 127.0.0.1:8080'), true)
+  assert.equal(isImportantRuntimeLine('request chat-123: 2 messages -> http://127.0.0.1:8080/v1/chat/completions'), true)
+  assert.equal(isImportantRuntimeLine('stream done: 42 approx tokens, 1.2s'), true)
   assert.equal(isImportantRuntimeLine('plain application output'), false)
 })
 
-test('reports terminal entries hidden by the 520-line visible cap', () => {
+test('reports terminal relevance exclusions and entries hidden by the 520-line visible cap', () => {
   const result = selectVisibleTerminalLogs(
-    Array.from({ length: 521 }, (_, index) => ({
-      source: 'stdout',
-      line: `server listening line ${index}`,
-    })),
+    [
+      { source: 'stdout', line: 'plain application output' },
+      ...Array.from({ length: 521 }, (_, index) => ({
+        source: 'stdout',
+        line: `server listening line ${index}`,
+      })),
+    ],
     520,
   )
 
   assert.equal(result.entries.length, 520)
+  assert.equal(result.excluded, 1)
   assert.equal(result.hidden, 1)
   assert.equal(result.entries[0].line, 'server listening line 1')
+})
+
+test('terminal summary reports entries excluded by the relevance filter', () => {
+  assert.match(rendererSource, /terminalView\.excluded/)
 })
 
 test('buffers split filter patterns independently for each source', () => {

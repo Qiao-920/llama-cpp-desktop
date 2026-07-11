@@ -15,6 +15,12 @@ test('rejects extra args that override UI-owned values', () => {
 test('rejects quoted UI-owned flags after shell-style splitting', () => {
   assert.throws(() => assertNoCoreArgConflicts('"--host" 0.0.0.0'), /--host/)
 })
+test('canonicalizes common llama-server aliases before rejecting UI-owned overrides', () => {
+  assert.throws(
+    () => assertNoCoreArgConflicts('-c 4096 -m model.gguf -t 8 -b 256 -ub 128 -ngl 99 --gpu-layers 99'),
+    /--ctx-size, --model, --threads, --batch-size, --ubatch-size, --n-gpu-layers/,
+  )
+})
 test('reports the configured listener and usable local URL separately', () => {
   assert.deepEqual(serviceUrls({ host: '0.0.0.0', port: 8080 }), {
     listenBaseUrl: 'http://0.0.0.0:8080',

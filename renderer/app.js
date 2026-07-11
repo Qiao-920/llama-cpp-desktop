@@ -970,6 +970,7 @@ function renderTerminalPanel() {
       <div class="terminal-summary">
         <span>正常终端视图：只显示 llama.cpp/server/runtime 输出，最多 520 行。</span>
         <strong class="log-stat">已过滤 ${Number(stats.filtered || 0)} 条噪音日志</strong>
+        <strong class="log-stat">终端视图已排除 ${terminalView.excluded} 条非运行时日志</strong>
         <strong class="log-stat">已截断 ${Number(stats.truncated || 0)} 条长日志</strong>
         <strong class="log-stat">终端视图已隐藏 ${terminalView.hidden} 条超出 520 行显示上限的日志</strong>
         <strong class="log-stat">主进程已丢弃 ${Number(stats.dropped || 0)} 条超出 1200 行存储容量的日志</strong>
