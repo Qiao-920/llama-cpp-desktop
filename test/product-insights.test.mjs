@@ -201,6 +201,16 @@ test('terminal panel surfaces diagnostic summary and copy export action', async 
   assert.match(source, /原始日志明细/)
 })
 
+test('terminal screen grid keeps console as the flexible fifth row', async () => {
+  const source = await readFile(new URL('../renderer/styles.css', import.meta.url), 'utf8')
+  const terminalBlocks = [...source.matchAll(/\.terminal-screen\s*\{[^}]*grid-template-rows:\s*([^;]+);/g)]
+
+  assert.ok(terminalBlocks.length > 0, 'expected .terminal-screen grid row declarations')
+  for (const block of terminalBlocks) {
+    assert.match(block[1], /auto\s+auto\s+auto\s+auto\s+minmax\(0,\s*1fr\)/)
+  }
+})
+
 test('diagnostic bundle emits compact Chinese text with status, endpoint, model basename, log stats, and recent terminal lines', () => {
   const text = diagnosticBundleText({
     config: { model: 'D:\\models\\Qwen3-8B.Q4_K_M.gguf' },

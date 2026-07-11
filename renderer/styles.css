@@ -2005,7 +2005,7 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
 .terminal-screen {
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   padding: 58px 44px 24px;
 }
 
@@ -2435,7 +2435,7 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
 }
 
 .terminal-screen {
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   background: #ffffff;
 }
 
