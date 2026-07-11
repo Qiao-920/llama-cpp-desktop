@@ -115,7 +115,7 @@ For Task 5, the then-current packaged app was launched with a clean, ignored pro
 | B-01 | PASS (source-inspected) | `defaultConfig()` in `desktop/main.mjs` sets `ctx_size: 32768`; no direct assertion executes this Electron-private builder. |
 | B-02 | PASS | Automated warning coverage plus both settings-warning screenshots. |
 | B-03 | PASS | Automated warning coverage plus both settings-warning screenshots. |
-| C-01 | PASS (automated) | Shared request pipeline coverage; live request summary not captured. |
+| C-01 | PASS (source-inspected) | `buildChatRequestBody` writes parsed `chat_template_kwargs`; no direct request-body assertion or live request was run. |
 | C-02 | PASS (automated) | CLI/JSON normalization test passed. |
 | C-04 | PASS (automated) | System-message ordering test passed. |
 | C-06 | PASS (automated) | Local-only and failed-output exclusion tests passed. |
