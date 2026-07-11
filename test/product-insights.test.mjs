@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import {
   diagnosticBundleText,
   modelCapability,
@@ -98,6 +99,55 @@ test('session budget reports configured context and approximate used tokens', ()
   assert.equal(budget.remainingTokens, 4058)
   assert.equal(budget.percentUsed, 1)
   assert.equal(budget.label, '38 / 4096 tokens')
+})
+
+test('runtime product copy used by Task 2 surfaces readable Chinese labels and actions', () => {
+  const rows = readinessChecklist({
+    config: { config_path: 'C:\\llama\\config.toml', model: 'D:\\models\\qwen.gguf' },
+    validation: { configExists: true, serverExists: true, modelExists: false },
+    status: { state: 'running', url: 'http://127.0.0.1:8080' },
+    dirty: true,
+  })
+  const copy = JSON.stringify(rows)
+
+  assert.match(copy, /配置文件/)
+  assert.match(copy, /已找到配置文件/)
+  assert.match(copy, /模型文件/)
+  assert.match(copy, /选择 GGUF 模型/)
+  assert.match(copy, /服务运行/)
+  assert.match(copy, /服务正在运行/)
+  assert.match(copy, /保存状态/)
+  assert.match(copy, /保存当前配置/)
+  assert.doesNotMatch(copy, /閰|嶇|鏂|妯|瀷|杩|绔|鐘/)
+})
+
+test('model capability copy distinguishes text, vision-ready, and mmproj-needed states in readable Chinese', () => {
+  const textOnly = modelCapability({
+    config: { mmproj: '' },
+    modelInfo: { modalities: ['text'], family: 'Qwen' },
+  })
+  const visionReady = modelCapability({
+    config: { mmproj: 'D:\\models\\mmproj.gguf' },
+    modelInfo: { modalities: ['vision'], family: 'LLaVA' },
+  })
+  const needsMmproj = modelCapability({
+    config: { mmproj: '' },
+    modelInfo: { modalities: ['vision'], family: 'LLaVA' },
+  })
+
+  assert.equal(textOnly.label, '文本模型')
+  assert.equal(visionReady.label, '视觉就绪')
+  assert.equal(needsMmproj.label, '需要 mmproj')
+  assert.doesNotMatch(JSON.stringify([textOnly, visionReady, needsMmproj]), /閰|嶇|鏂|妯|瀷|杩|绔|鐘/)
+})
+
+test('chat and model info surfaces include Task 2 product sections', async () => {
+  const source = await readFile(new URL('../renderer/app.js', import.meta.url), 'utf8')
+
+  assert.match(source, /readinessChecklist/)
+  assert.match(source, /modelCapability/)
+  assert.match(source, /运行检查/)
+  assert.match(source, /模型能力/)
 })
 
 test('diagnostic bundle emits compact Chinese text with status, endpoint, model basename, log stats, and recent terminal lines', () => {

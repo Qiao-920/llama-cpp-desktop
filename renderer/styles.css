@@ -462,6 +462,61 @@ button {
   z-index: 3;
 }
 
+.run-check-strip {
+  min-height: 34px;
+  margin: 0 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 253, 0.94);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  box-shadow: 0 8px 24px rgba(18, 22, 17, 0.04);
+}
+
+.run-check-title {
+  font-weight: 800;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.run-check-count {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.run-check-count.pass {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.run-check-count.warn {
+  background: #fff6d8;
+  color: #766018;
+}
+
+.run-check-count.block {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.run-check-next {
+  min-width: 0;
+  flex: 1;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer {
   min-height: 112px;
   border: 1px solid var(--line);
@@ -2533,6 +2588,40 @@ body:has(.app-shell.sidebar-collapsed) .drag-region {
   border-radius: 10px;
   background: #fff;
   overflow: hidden;
+}
+
+.model-capability-card {
+  grid-column: 1 / -1;
+}
+
+.capability-badge {
+  min-height: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef1ec;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.capability-badge.good {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.capability-badge.warning {
+  background: #fff6d8;
+  color: #766018;
+}
+
+.capability-detail {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid #ecefe9;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .model-info-grid {

@@ -8,6 +8,10 @@ import {
   renderAttachmentMenu,
   renderAttachmentNotice,
 } from './lib/attachment-policy.js'
+import {
+  modelCapability,
+  readinessChecklist,
+} from './lib/product-insights.js'
 
 const sections = [
   ['chat', '对话', '桌面端直接使用模型'],
@@ -682,6 +686,76 @@ function attachmentLabel(kind) {
   }[kind] || '文件'
 }
 
+function readinessSummary() {
+  const rows = readinessChecklist({
+    config: state.config || {},
+    validation: state.validation,
+    status: state.status,
+    dirty: state.dirty,
+  })
+  const counts = rows.reduce(
+    (summary, row) => {
+      if (row.state === 'ready') summary.pass += 1
+      else if (row.state === 'blocked') summary.block += 1
+      else summary.warn += 1
+      return summary
+    },
+    { pass: 0, warn: 0, block: 0 },
+  )
+  const next = rows.find(row => row.state === 'blocked')
+    || rows.find(row => row.state === 'warning')
+    || rows.find(row => row.state === 'pending')
+    || rows[0]
+
+  return {
+    rows,
+    counts,
+    nextAction: next?.state === 'ready' && counts.warn === 0 && counts.block === 0 ? '可以开始对话' : next?.action || '检查本地运行状态',
+  }
+}
+
+function renderReadinessStrip() {
+  const { counts, nextAction } = readinessSummary()
+  return `
+    <div class="run-check-strip" aria-label="运行检查">
+      <span class="run-check-title">运行检查</span>
+      <span class="run-check-count pass">通过 ${counts.pass}</span>
+      <span class="run-check-count warn">提醒 ${counts.warn}</span>
+      <span class="run-check-count block">阻塞 ${counts.block}</span>
+      <span class="run-check-next">${escapeHtml(nextAction)}</span>
+    </div>
+  `
+}
+
+function supportValue(kind, capability) {
+  if (kind === 'image') {
+    if (capability.mode === 'vision') return '图片理解可用'
+    if (capability.mode === 'vision-needs-mmproj') return '需要 mmproj'
+    return '当前模型仅文本'
+  }
+  if (kind === 'pdf') return '未接入原生 PDF'
+  return '未接入音频输入'
+}
+
+function buildCapabilityRows(info, capability) {
+  const config = state.config || {}
+  const filePath = info?.filePath || config.model || ''
+  const fileName = info?.name || basename(filePath) || '未选择模型'
+  const endpoint = info?.serverUrl || state.status?.url || ''
+  const contextSize = config.ctx_size || info?.ctxSize || info?.trainingContext || ''
+
+  return [
+    { label: '模型文件', value: fileName },
+    { label: '量化等级', value: info?.quantization || quantLabelFromName(fileName) || '未识别' },
+    { label: '上下文', value: contextSize ? `${contextSize} tokens` : '未设置' },
+    { label: '端点', value: endpoint ? `${String(endpoint).replace(/\/+$/, '')}/v1` : '未启动' },
+    { label: '多模态', value: capability.label },
+    { label: '图片', value: supportValue('image', capability) },
+    { label: 'PDF', value: supportValue('pdf', capability) },
+    { label: '音频', value: supportValue('audio', capability) },
+  ]
+}
+
 function renderAttachmentItem(item, index, removable, mode = 'composer') {
   const kind = String(item?.kind || 'file')
   const name = String(item?.name || 'attachment')
@@ -733,10 +807,10 @@ function renderMessageActions(index, message) {
   const canRetry = message.role === 'assistant'
   return `
     <div class="message-actions">
-      <button type="button" data-action="copy-message" data-index="${index}" title="复制">⧉</button>
-      <button type="button" data-action="edit-message" data-index="${index}" title="编辑">✎</button>
-      ${canRetry ? `<button type="button" data-action="retry-message" data-index="${index}" title="重新生成">↻</button>` : ''}
-      <button type="button" data-action="delete-message" data-index="${index}" title="删除">⌫</button>
+      <button type="button" data-action="copy-message" data-index="${index}" title="复制消息">⧉</button>
+      <button type="button" data-action="edit-message" data-index="${index}" title="编辑消息">✎</button>
+      ${canRetry ? `<button type="button" data-action="retry-message" data-index="${index}" title="重新生成回复">↻</button>` : ''}
+      <button type="button" data-action="delete-message" data-index="${index}" title="删除消息">⌫</button>
     </div>
   `
 }
@@ -1049,6 +1123,8 @@ function renderModelInfoModal() {
 
   const info = state.modelInfo || {}
   const { rows, runtimeRows, templateText } = buildBetterModelInfoRows(info)
+  const capability = modelCapability({ config: state.config || {}, modelInfo: info })
+  const capabilityRows = buildCapabilityRows(info, capability)
   const body = info.loading
     ? '<div class="model-info-empty">正在读取当前模型信息...</div>'
     : info.error
@@ -1082,6 +1158,24 @@ function renderModelInfoModal() {
                 `)
                 .join('')}
             </div>
+          </div>
+          <div class="model-info-card model-capability-card">
+            <div class="model-template-head compact-head">
+              <span>模型能力</span>
+              <span class="capability-badge ${escapeHtml(capability.risk)}">${escapeHtml(capability.label)}</span>
+            </div>
+            <div class="model-info-grid">
+              ${capabilityRows
+                .map(row => `
+                  <div class="model-info-row">
+                    <span>${escapeHtml(row.label)}</span>
+                    <strong title="${escapeAttribute(row.value)}">${escapeHtml(row.value)}</strong>
+                    <div></div>
+                  </div>
+                `)
+                .join('')}
+            </div>
+            <p class="capability-detail">${escapeHtml(capability.detail)}</p>
           </div>
         </div>
         <div class="model-template-card">
@@ -1150,6 +1244,7 @@ function renderChat() {
     <section class="chat-screen ${state.chatMessages.length ? '' : 'empty-chat'}">
       <div class="chat-feed" id="chatFeed">${messages}</div>
       <div class="composer-wrap">
+        ${renderReadinessStrip()}
         ${renderAttachmentChips(state.attachments, true, 'composer')}
         <div class="composer">
           <div class="attach-wrap">
