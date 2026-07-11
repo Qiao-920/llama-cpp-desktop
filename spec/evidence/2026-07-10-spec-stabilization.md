@@ -146,3 +146,53 @@ Final-review defects fixed on 2026-07-11: common llama-server aliases could over
 ## Final Conclusion
 
 This evidence run passes the requested automated gate and a fresh HEAD package rebuild. Historical model-independent UI captures are retained but are not claimed as fresh final-review evidence. This is not a full end-to-end acceptance pass because the live model/server, final request-body observation, real attachment serialization, live terminal, fresh terminal screenshots, and remote release checks remain source-inspected, unrun, or blocked as labeled above.
+
+---
+
+## Product Polish Evidence
+
+| Item | Value |
+| --- | --- |
+| Date | 2026-07-11 |
+| Branch | `feat/spec-stabilization` |
+| Product polish source commit | `24173701bbf3426ba6006f3a77a42fb12cad9f26` |
+| Portable package | `dist-product-polish\Llama.cpp-Desktop.exe` |
+| Executable size | 90,853,150 bytes (86.64 MiB) |
+| SHA256 | `46F608E6C6F7B0445049B5B39772FEF30C0D774B6BD3D704EC89601332A8E128` |
+| Desktop shortcut | `C:\Users\Administrator\Desktop\Llama.cpp Desktop - Product Polish.lnk` |
+
+### Product Scope
+
+P0 and P1 product work added a readiness layer, model-capability transparency, and terminal diagnostics:
+
+1. Chat now shows a compact `运行检查` strip with pass/reminder/block counts and the next action.
+2. The model info panel now includes a `模型能力` card with model file, quantization, context, endpoint, multimodal readiness, and image/PDF/audio support status.
+3. Terminal logs now show a `诊断摘要`, recent meaningful event, next action, retained log counters, raw log detail label, and a `复制诊断` action.
+4. Terminal layout was fixed so the raw log console remains the flexible scroll row after adding diagnostic rows.
+
+### Verification
+
+```powershell
+cmd /c "npm test && node --check desktop/main.mjs && node --check desktop/preload.cjs && node --check renderer/app.js && git diff --check && git status -sb && git ls-files .superpowers"
+npx electron-builder --publish never --config.directories.output=dist-product-polish
+Get-FileHash dist-product-polish\Llama.cpp-Desktop.exe -Algorithm SHA256
+```
+
+Result:
+
+```text
+npm test: exit 0; 50 passed, 0 failed, 0 skipped
+node --check desktop/main.mjs: exit 0
+node --check desktop/preload.cjs: exit 0
+node --check renderer/app.js: exit 0
+git diff --check: exit 0
+git status -sb: only the pre-existing unstaged package-lock.json remained
+git ls-files .superpowers: empty
+electron-builder: exit 0
+```
+
+The portable app was opened from `dist-product-polish\Llama.cpp-Desktop.exe`. The initially focused window was an older portable instance; it was closed and the new package was reopened. The running temporary `resources\app.asar` was source-checked and contained `运行检查`, `模型能力`, `诊断摘要`, `复制诊断`, and terminal diagnostic CSS. A fresh screenshot confirmed the new empty-chat readiness strip was visible.
+
+### Remaining Product Risks
+
+Live model streaming, real multimodal attachment behavior, and a live llama.cpp terminal error scenario still require manual smoke testing with a selected GGUF model and representative attachments. The product surface is now instrumented to explain those states, but this evidence run did not validate every real model capability path.
