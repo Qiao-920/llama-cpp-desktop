@@ -50,6 +50,18 @@ export function isImportantRuntimeLine(line) {
     /\b(?:server is listening|server listening|listening on|model loaded|request (?:started|completed)|tokens per second)\b/i.test(text)
 }
 
+export function selectVisibleTerminalLogs(entries, limit = 520) {
+  const displayable = (Array.isArray(entries) ? entries : [])
+    .filter(entry => entry?.source === 'desktop' || isImportantRuntimeLine(entry?.line))
+  const maximum = Math.max(0, Number.isFinite(limit) ? Math.floor(limit) : 0)
+  const hidden = Math.max(0, displayable.length - maximum)
+
+  return {
+    entries: maximum ? displayable.slice(-maximum) : [],
+    hidden,
+  }
+}
+
 function processLogLines(source, rawLines) {
   const entries = []
   let filtered = 0

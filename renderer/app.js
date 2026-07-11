@@ -1,6 +1,6 @@
 ﻿import { runtimeWarnings } from '../desktop/lib/runtime-policy.mjs'
 
-import { isImportantRuntimeLine } from '../desktop/lib/log-pipeline.mjs'
+import { selectVisibleTerminalLogs } from '../desktop/lib/log-pipeline.mjs'
 
 import {
   attachmentMenuPosition,
@@ -769,9 +769,7 @@ function visibleLogs(limit = 420) {
 }
 
 function visibleTerminalLogs(limit = 520) {
-  return logEntries()
-    .filter(entry => entry.source === 'desktop' || isImportantRuntimeLine(entry.line))
-    .slice(-limit)
+  return selectVisibleTerminalLogs(logEntries(), limit)
 }
 
 function renderLogRow(entry, className = 'terminal-row') {
@@ -953,7 +951,8 @@ function renderAttachmentChips(attachments, removable, role = 'composer') {
 }
 
 function renderTerminalPanel() {
-  const logs = visibleTerminalLogs()
+  const terminalView = visibleTerminalLogs()
+  const logs = terminalView.entries
   const logRows = logs.length
     ? logs.map(entry => `<div class="terminal-line">${escapeHtml(entry.line)}</div>`).join('')
     : '<div class="terminal-line terminal-muted">Waiting for llama.cpp server output...</div>'
@@ -972,7 +971,8 @@ function renderTerminalPanel() {
         <span>正常终端视图：只显示 llama.cpp/server/runtime 输出，最多 520 行。</span>
         <strong class="log-stat">已过滤 ${Number(stats.filtered || 0)} 条噪音日志</strong>
         <strong class="log-stat">已截断 ${Number(stats.truncated || 0)} 条长日志</strong>
-        <strong class="log-stat">已丢弃 ${Number(stats.dropped || 0)} 条超出 1200 行容量的日志</strong>
+        <strong class="log-stat">终端视图已隐藏 ${terminalView.hidden} 条超出 520 行显示上限的日志</strong>
+        <strong class="log-stat">主进程已丢弃 ${Number(stats.dropped || 0)} 条超出 1200 行存储容量的日志</strong>
       </div>
       <div class="terminal-console" id="inlineLogBox">${logRows}</div>
     </section>

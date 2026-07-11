@@ -7,6 +7,7 @@ import {
   isImportantRuntimeLine,
   processBufferedLogChunk,
   processLogChunk,
+  selectVisibleTerminalLogs,
 } from '../desktop/lib/log-pipeline.mjs'
 
 test('filters streamed JSON, prompt, code echo, and idle polling', () => {
@@ -32,6 +33,20 @@ test('recognizes the runtime lines retained by the terminal', () => {
   assert.equal(isImportantRuntimeLine('CUDA0 ready'), true)
   assert.equal(isImportantRuntimeLine('server listening at 127.0.0.1:8080'), true)
   assert.equal(isImportantRuntimeLine('plain application output'), false)
+})
+
+test('reports terminal entries hidden by the 520-line visible cap', () => {
+  const result = selectVisibleTerminalLogs(
+    Array.from({ length: 521 }, (_, index) => ({
+      source: 'stdout',
+      line: `server listening line ${index}`,
+    })),
+    520,
+  )
+
+  assert.equal(result.entries.length, 520)
+  assert.equal(result.hidden, 1)
+  assert.equal(result.entries[0].line, 'server listening line 1')
 })
 
 test('buffers split filter patterns independently for each source', () => {
