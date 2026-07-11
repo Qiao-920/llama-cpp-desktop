@@ -155,10 +155,10 @@ This evidence run passes the requested automated gate and a fresh HEAD package r
 | --- | --- |
 | Date | 2026-07-11 |
 | Branch | `feat/spec-stabilization` |
-| Product polish source commit | `24173701bbf3426ba6006f3a77a42fb12cad9f26` |
+| Product polish source commit | `8f5d3ea57cd96c8ff92a066acba68fde3abee614` |
 | Portable package | `dist-product-polish\Llama.cpp-Desktop.exe` |
-| Executable size | 90,853,150 bytes (86.64 MiB) |
-| SHA256 | `46F608E6C6F7B0445049B5B39772FEF30C0D774B6BD3D704EC89601332A8E128` |
+| Executable size | 90,852,616 bytes (86.64 MiB) |
+| SHA256 | `22EF944527246C898F4538D8FDB5C8DA7C75B07939A6B2739E45F6CE7667E34D` |
 | Desktop shortcut | `C:\Users\Administrator\Desktop\Llama.cpp Desktop - Product Polish.lnk` |
 
 ### Product Scope
@@ -166,7 +166,7 @@ This evidence run passes the requested automated gate and a fresh HEAD package r
 P0 and P1 product work added a readiness layer, model-capability transparency, and terminal diagnostics:
 
 1. Chat now shows a compact `运行检查` strip with pass/reminder/block counts and the next action.
-2. The model info panel now includes a `模型能力` card with model file, quantization, context, endpoint, multimodal readiness, and image/PDF/audio support status.
+2. The model info panel now includes a `模型能力` card with model file, quantization, context, endpoint, multimodal readiness, and image/PDF/audio support status. Capability copy is intentionally conservative: `mmproj` is described as visual projection configuration that still needs real model support validation, not a guarantee of image understanding.
 3. Terminal logs now show a `诊断摘要`, recent meaningful event, next action, retained log counters, raw log detail label, and a `复制诊断` action.
 4. Terminal layout was fixed so the raw log console remains the flexible scroll row after adding diagnostic rows.
 
@@ -181,7 +181,7 @@ Get-FileHash dist-product-polish\Llama.cpp-Desktop.exe -Algorithm SHA256
 Result:
 
 ```text
-npm test: exit 0; 50 passed, 0 failed, 0 skipped
+npm test: exit 0; 53 passed, 0 failed, 0 skipped
 node --check desktop/main.mjs: exit 0
 node --check desktop/preload.cjs: exit 0
 node --check renderer/app.js: exit 0
@@ -191,7 +191,7 @@ git ls-files .superpowers: empty
 electron-builder: exit 0
 ```
 
-The portable app was opened from `dist-product-polish\Llama.cpp-Desktop.exe`. The initially focused window was an older portable instance; it was closed and the new package was reopened. The running temporary `resources\app.asar` was source-checked and contained `运行检查`, `模型能力`, `诊断摘要`, `复制诊断`, and terminal diagnostic CSS. A fresh screenshot confirmed the new empty-chat readiness strip was visible.
+The portable app was opened from `dist-product-polish\Llama.cpp-Desktop.exe`. The initially focused window was an older portable instance; it was closed and the new package was reopened. After the final capability-copy fix, the package was rebuilt again from `8f5d3ea57cd96c8ff92a066acba68fde3abee614`.
 
 ### Remaining Product Risks
 
