@@ -40,7 +40,7 @@ test('readiness checklist treats validation configExists false as stale config p
   assert.equal(configRow.action, '选择 config.toml')
 })
 
-test('model capability labels text-only and vision-ready setups', () => {
+test('model capability labels text-only and vision projection configured setups', () => {
   assert.deepEqual(
     modelCapability({
       config: { model: 'D:\\models\\qwen-text.gguf', mmproj: '' },
@@ -60,12 +60,38 @@ test('model capability labels text-only and vision-ready setups', () => {
       modelInfo: { modalities: ['text', 'vision'], family: 'LLaVA' },
     }),
     {
-      mode: 'vision',
-      label: '视觉就绪',
-      risk: 'good',
-      detail: 'LLaVA · 已配置 mmproj，可尝试图片理解。',
+      mode: 'vision-configured',
+      label: '视觉投影已配置',
+      risk: 'warning',
+      detail: 'LLaVA · 已配置 mmproj，需实测模型支持后再确认图片理解。',
     },
   )
+})
+
+test('model capability treats mmproj on a text model as configured projection, not guaranteed image understanding', () => {
+  const capability = modelCapability({
+    config: { model: 'D:\\models\\qwen-text.gguf', mmproj: 'D:\\models\\stale-mmproj.gguf' },
+    modelInfo: { family: 'Qwen' },
+  })
+
+  assert.equal(capability.mode, 'vision-configured')
+  assert.equal(capability.label, '视觉投影已配置')
+  assert.equal(capability.risk, 'warning')
+  assert.match(capability.detail, /已配置 mmproj/)
+  assert.match(capability.detail, /需实测模型支持/)
+  assert.doesNotMatch(JSON.stringify(capability), /视觉就绪|图片理解可用/)
+})
+
+test('model capability labels vision-hinted models without mmproj as needing projection', () => {
+  const capability = modelCapability({
+    config: { model: 'D:\\models\\llava.gguf', mmproj: '' },
+    modelInfo: { modalities: ['image'], family: 'LLaVA' },
+  })
+
+  assert.equal(capability.mode, 'vision-needs-mmproj')
+  assert.equal(capability.label, '需要 mmproj')
+  assert.equal(capability.risk, 'warning')
+  assert.match(capability.detail, /需要视觉投影文件/)
 })
 
 test('terminal diagnosis summarizes status, risk, and next action from state and log stats', () => {
@@ -162,7 +188,7 @@ test('runtime product copy used by Task 2 surfaces readable Chinese labels and a
   assert.doesNotMatch(copy, /閰|嶇|鏂|妯|瀷|杩|绔|鐘/)
 })
 
-test('model capability copy distinguishes text, vision-ready, and mmproj-needed states in readable Chinese', () => {
+test('model capability copy distinguishes text, projection-configured, and mmproj-needed states in readable Chinese', () => {
   const textOnly = modelCapability({
     config: { mmproj: '' },
     modelInfo: { modalities: ['text'], family: 'Qwen' },
@@ -177,7 +203,7 @@ test('model capability copy distinguishes text, vision-ready, and mmproj-needed 
   })
 
   assert.equal(textOnly.label, '文本模型')
-  assert.equal(visionReady.label, '视觉就绪')
+  assert.equal(visionReady.label, '视觉投影已配置')
   assert.equal(needsMmproj.label, '需要 mmproj')
   assert.doesNotMatch(JSON.stringify([textOnly, visionReady, needsMmproj]), /閰|嶇|鏂|妯|瀷|杩|绔|鐘/)
 })
@@ -189,6 +215,15 @@ test('chat and model info surfaces include Task 2 product sections', async () =>
   assert.match(source, /modelCapability/)
   assert.match(source, /运行检查/)
   assert.match(source, /模型能力/)
+})
+
+test('image support UI copy stays cautious about mmproj and unconfirmed model support', async () => {
+  const source = await readFile(new URL('../renderer/app.js', import.meta.url), 'utf8')
+
+  assert.match(source, /已配置 mmproj，需实测模型支持/)
+  assert.match(source, /需要 mmproj/)
+  assert.match(source, /未确认支持/)
+  assert.doesNotMatch(source, /图片理解可用/)
 })
 
 test('terminal panel surfaces diagnostic summary and copy export action', async () => {

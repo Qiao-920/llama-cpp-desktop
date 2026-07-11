@@ -19,6 +19,19 @@ function endpointUrl(status = {}) {
   return base ? `${base}/v1` : ''
 }
 
+function hasVisionHint({ config = {}, modelInfo = {} } = {}) {
+  const modalities = Array.isArray(modelInfo.modalities) ? modelInfo.modalities.map(item => String(item).toLowerCase()) : []
+  if (modalities.includes('vision') || modalities.includes('image')) return true
+
+  const hintText = [
+    modelInfo.name,
+    modelInfo.family,
+    config.model,
+  ].map(value => basename(value).toLowerCase()).join(' ')
+
+  return /\b(?:llava|bakllava|moondream|minicpm-v|qwen(?:2(?:\.5)?)?-vl|qwen-vl|vision|vl)\b/.test(hintText)
+}
+
 function checklistState(isReady, blockedWhenMissing = true) {
   if (isReady) return 'ready'
   return blockedWhenMissing ? 'blocked' : 'pending'
@@ -73,25 +86,24 @@ export function readinessChecklist({ config = {}, validation = {}, status = {}, 
 
 export function modelCapability({ config = {}, modelInfo = {} } = {}) {
   const hasMmproj = present(config.mmproj)
-  const modalities = Array.isArray(modelInfo.modalities) ? modelInfo.modalities.map(item => String(item).toLowerCase()) : []
   const family = modelInfo.family || '本地模型'
-  const visionReady = hasMmproj || modalities.includes('vision') || modalities.includes('image')
+  const visionHinted = hasVisionHint({ config, modelInfo })
 
-  if (visionReady && hasMmproj) {
+  if (hasMmproj) {
     return {
-      mode: 'vision',
-      label: '视觉就绪',
-      risk: 'good',
-      detail: `${family} · 已配置 mmproj，可尝试图片理解。`,
+      mode: 'vision-configured',
+      label: '视觉投影已配置',
+      risk: 'warning',
+      detail: `${family} · 已配置 mmproj，需实测模型支持后再确认图片理解。`,
     }
   }
 
-  if (visionReady) {
+  if (visionHinted) {
     return {
       mode: 'vision-needs-mmproj',
       label: '需要 mmproj',
       risk: 'warning',
-      detail: `${family} · 模型可能支持视觉，但尚未配置 mmproj。`,
+      detail: `${family} · 模型可能支持视觉，但需要视觉投影文件 mmproj。`,
     }
   }
 

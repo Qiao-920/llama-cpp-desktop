@@ -731,9 +731,9 @@ function renderReadinessStrip() {
 
 function supportValue(kind, capability) {
   if (kind === 'image') {
-    if (capability.mode === 'vision') return '图片理解可用'
+    if (capability.mode === 'vision-configured') return '已配置 mmproj，需实测模型支持'
     if (capability.mode === 'vision-needs-mmproj') return '需要 mmproj'
-    return '当前模型仅文本'
+    return '未确认支持'
   }
   if (kind === 'pdf') return '未接入原生 PDF'
   return '未接入音频输入'
