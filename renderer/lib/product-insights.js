@@ -27,7 +27,7 @@ function checklistState(isReady, blockedWhenMissing = true) {
 export function readinessChecklist({ config = {}, validation = {}, status = {}, dirty = false } = {}) {
   const serverReady = Boolean(validation.serverExists)
   const modelReady = Boolean(validation.modelExists)
-  const configReady = Boolean(validation.configExists || present(config.config_path))
+  const configReady = Boolean(validation.configExists ?? present(config.config_path))
   const serviceRunning = status.state === 'running'
   const endpointReady = present(status.url)
 

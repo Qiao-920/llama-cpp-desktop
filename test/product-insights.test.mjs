@@ -26,6 +26,19 @@ test('readiness checklist turns config, validation, status, and dirty state into
   assert.equal(rows.find(row => row.id === 'saved').action, '保存当前配置')
 })
 
+test('readiness checklist treats validation configExists false as stale config path', () => {
+  const rows = readinessChecklist({
+    config: {
+      config_path: 'C:\\llama\\missing-config.toml',
+    },
+    validation: { configExists: false, serverExists: true, modelExists: true },
+  })
+
+  const configRow = rows.find(row => row.id === 'config')
+  assert.equal(configRow.state, 'blocked')
+  assert.equal(configRow.action, '选择 config.toml')
+})
+
 test('model capability labels text-only and vision-ready setups', () => {
   assert.deepEqual(
     modelCapability({
