@@ -1,10 +1,19 @@
 import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell } from 'electron'
-import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { execFile, spawn } from 'node:child_process'
+import { existsSync, readdirSync } from 'node:fs'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import net from 'node:net'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { buildRequestMessages, createRequestRegistry, extractStreamDelta, normalizeChatTemplateKwargs } from './lib/chat-pipeline.mjs'
+import { promisify } from 'node:util'
+import {
+  buildChatRequestBody,
+  buildRequestMessages,
+  chatQualityDefaults,
+  createRequestRegistry,
+  extractStreamDelta,
+} from './lib/chat-pipeline.mjs'
 import { appendVisibleLogs, createLogChunkBuffers, flushLogChunkBuffer, processBufferedLogChunk, processLogChunk } from './lib/log-pipeline.mjs'
 import { DEFAULT_HOST, assertNoCoreArgConflicts, assertStartableServerConfig, runtimeWarnings, serviceUrls, splitExtraArgs } from './lib/runtime-policy.mjs'
 
@@ -15,6 +24,7 @@ const preloadPath = path.join(__dirname, 'preload.cjs')
 const rendererPath = path.join(rootDir, 'renderer', 'index.html')
 const iconPath = path.join(rootDir, 'assets', 'llama-cpp.ico')
 const trayIconPath = path.join(rootDir, 'assets', 'llama-cpp-tray.png')
+const execFileAsync = promisify(execFile)
 const authoredBaseDir = 'G:\\llama.cpp\\llama.cpp启动器'
 const authoredServerPath = 'G:\\llama.cpp\\llama-b8272-bin-win-cuda-12.4-x64\\llama-server.exe'
 const authoredServerDir = path.dirname(authoredServerPath)
@@ -59,6 +69,7 @@ function defaultStatePath() {
 }
 
 function defaultConfig() {
+  const quality = chatQualityDefaults('quality')
   return {
     launch_mode: 'direct',
     launcher_path: defaultLauncherPath(),
@@ -72,14 +83,15 @@ function defaultConfig() {
     ctx_size: 32768,
     n_predict: -1,
     n_gpu_layers: 99,
-    chat_template_kwargs: '{"enable_thinking": false}',
+    chat_quality_mode: quality.chat_quality_mode,
+    chat_template_kwargs: quality.chat_template_kwargs,
     request_timeout_ms: 600000,
-    temp: 0.8,
-    top_k: 20,
-    top_p: 0.95,
-    min_p: 0,
-    presence_penalty: 1.5,
-    repeat_penalty: '',
+    temp: quality.temp,
+    top_k: quality.top_k,
+    top_p: quality.top_p,
+    min_p: quality.min_p,
+    presence_penalty: quality.presence_penalty,
+    repeat_penalty: quality.repeat_penalty,
     threads: '',
     threads_batch: '',
     batch_size: '',
@@ -92,10 +104,12 @@ function defaultConfig() {
     main_gpu: '',
     extra_args: '',
     show_thinking: true,
-    expand_thinking: false,
+    expand_thinking: quality.expand_thinking,
     show_raw_output: false,
-    verbose: true,
-    log_verbosity: 3,
+    theme_mode: 'system',
+    chat_font: 'default',
+    verbose: false,
+    log_verbosity: '',
     webui: true,
     embeddings: false,
     continuous_batching: true,
@@ -282,6 +296,7 @@ function normalizeConfig(values, state = {}) {
     ctx_size: toNumber(merged.ctx_size, base.ctx_size),
     n_predict: toNumber(merged.n_predict, base.n_predict),
     n_gpu_layers: toNumber(merged.n_gpu_layers, base.n_gpu_layers),
+    chat_quality_mode: merged.chat_quality_mode === 'fast' ? 'fast' : 'quality',
     request_timeout_ms: toNumber(merged.request_timeout_ms, base.request_timeout_ms),
     temp: toNumber(merged.temp, base.temp),
     top_k: toNumber(merged.top_k, base.top_k),
@@ -293,6 +308,8 @@ function normalizeConfig(values, state = {}) {
     show_thinking: merged.show_thinking !== false,
     expand_thinking: Boolean(merged.expand_thinking),
     show_raw_output: Boolean(merged.show_raw_output),
+    theme_mode: ['light', 'dark', 'system'].includes(merged.theme_mode) ? merged.theme_mode : 'system',
+    chat_font: ['default', 'sans', 'system', 'readable'].includes(merged.chat_font) ? merged.chat_font : 'default',
     verbose: Boolean(merged.verbose),
     webui: Boolean(merged.webui),
     embeddings: Boolean(merged.embeddings),
@@ -346,6 +363,7 @@ function buildToml(config) {
     `request_timeout_ms = ${config.request_timeout_ms}`,
     '',
     '# 对话模板参数',
+    `chat_quality_mode = ${tomlString(config.chat_quality_mode || 'quality')}`,
     `chat_template_kwargs = ${tomlString(config.chat_template_kwargs)}`,
     '',
     '# 采样设置',
@@ -402,7 +420,7 @@ function buildToml(config) {
     '',
     '# 日志与功能',
     `verbose = ${config.verbose ? 'true' : 'false'}`,
-    `log_verbosity = ${config.log_verbosity}`,
+    optionalNumberLine('log_verbosity', config.log_verbosity) || '# log_verbosity = ',
     `webui = ${config.webui ? 'true' : 'false'}`,
     `embeddings = ${config.embeddings ? 'true' : 'false'}`,
     `continuous_batching = ${config.continuous_batching ? 'true' : 'false'}`,
@@ -412,6 +430,8 @@ function buildToml(config) {
     `show_thinking = ${config.show_thinking ? 'true' : 'false'}`,
     `expand_thinking = ${config.expand_thinking ? 'true' : 'false'}`,
     `show_raw_output = ${config.show_raw_output ? 'true' : 'false'}`,
+    `theme_mode = ${tomlString(config.theme_mode || 'system')}`,
+    `chat_font = ${tomlString(config.chat_font || 'default')}`,
     '',
   )
 
@@ -420,7 +440,8 @@ function buildToml(config) {
 
 async function readJson(filePath, fallback) {
   try {
-    return JSON.parse(await readFile(filePath, 'utf8'))
+    const raw = await readFile(filePath, 'utf8')
+    return JSON.parse(raw.replace(/^\uFEFF/, ''))
   } catch {
     return fallback
   }
@@ -477,6 +498,83 @@ async function saveConfig(config) {
 
 function localUrl(config) {
   return serviceUrls(config).localBaseUrl
+}
+
+async function runPowerShellJson(script, fallback) {
+  if (process.platform !== 'win32') return fallback
+  try {
+    const { stdout } = await execFileAsync('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      script,
+    ], { windowsHide: true, timeout: 5000 })
+    const text = String(stdout || '').trim()
+    return text ? JSON.parse(text) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+async function getGpuInfo() {
+  const script = [
+    '$items = Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM',
+    '$items | ConvertTo-Json -Compress',
+  ].join('; ')
+  const raw = await runPowerShellJson(script, [])
+  const list = Array.isArray(raw) ? raw : raw ? [raw] : []
+  return list.map(item => ({
+    name: String(item.Name || 'GPU'),
+    adapterRAMGB: item.AdapterRAM ? Math.round((Number(item.AdapterRAM) / 1024 / 1024 / 1024) * 10) / 10 : 0,
+  }))
+}
+
+function canBindPort(port) {
+  return new Promise(resolve => {
+    const server = net.createServer()
+    server.once('error', () => resolve(false))
+    server.once('listening', () => {
+      server.close(() => resolve(true))
+    })
+    server.listen(port, '127.0.0.1')
+  })
+}
+
+async function suggestedPort(startPort) {
+  for (let port = startPort + 1; port < startPort + 40; port += 1) {
+    if (await canBindPort(port)) return port
+  }
+  return startPort + 1
+}
+
+async function inspectPort(port) {
+  const targetPort = Number(port) || 8080
+  const script = [
+    `$connections = Get-NetTCPConnection -LocalPort ${targetPort} -ErrorAction SilentlyContinue`,
+    '$items = foreach ($connection in $connections) {',
+    '  $process = Get-Process -Id $connection.OwningProcess -ErrorAction SilentlyContinue',
+    '  [pscustomobject]@{ pid = $connection.OwningProcess; name = $process.ProcessName; state = $connection.State; localAddress = $connection.LocalAddress }',
+    '}',
+    '$items | ConvertTo-Json -Compress',
+  ].join('; ')
+  const raw = await runPowerShellJson(script, [])
+  const processes = (Array.isArray(raw) ? raw : raw ? [raw] : [])
+    .filter(item => item?.pid)
+    .map(item => ({
+      pid: Number(item.pid),
+      name: String(item.name || 'unknown'),
+      state: String(item.state || ''),
+      localAddress: String(item.localAddress || ''),
+    }))
+  const occupied = processes.length > 0 || !(await canBindPort(targetPort))
+  return {
+    checked: true,
+    port: targetPort,
+    occupied,
+    processes,
+    suggestedPort: occupied ? await suggestedPort(targetPort) : targetPort,
+  }
 }
 
 function hasValue(value) {
@@ -585,10 +683,6 @@ function normalizeChatTemplateKwargsText(raw) {
   return text
 }
 
-function parseChatTemplateKwargs(raw) {
-  return normalizeChatTemplateKwargs(raw)
-}
-
 function prepareChatMessages(rawMessages) {
   const messages = []
 
@@ -603,7 +697,7 @@ function prepareChatMessages(rawMessages) {
       .map(item => `\n\n--- Attachment: ${item.name} ---\n${item.text}`)
     const fileBlocks = attachments
       .filter(item => item.kind !== 'text' && item.kind !== 'image')
-      .map(item => `\n\n[Attachment: ${item.name}; ${item.mime || 'file'}; path: ${item.path}]`)
+      .map(item => `\n\n[Attachment: ${item.name}; ${item.mime || 'file'}; ${item.path ? `path: ${item.path}` : 'embedded drag-and-drop file'}]`)
     const imageAttachments = attachments.filter(item => item.kind === 'image' && item.dataUrl)
     const mergedText = `${text}${textBlocks.join('')}${fileBlocks.join('')}`.trim()
 
@@ -636,29 +730,82 @@ function prepareChatMessages(rawMessages) {
   return messages
 }
 
-function buildChatRequestBody(config, messages, stream) {
-  const body = {
-    model: path.basename(config.model || 'local-model'),
-    messages,
-    temperature: toNumber(config.temp, 0.8),
-    top_p: toNumber(config.top_p, 0.95),
-    max_tokens: config.n_predict === -1 ? undefined : toNumber(config.n_predict, undefined),
-    stream,
+function runtimePackageInfo(config) {
+  const serverDir = path.dirname(String(config.llama_server_path || ''))
+  const info = {
+    serverDir,
+    serverDirExists: existsSync(serverDir),
+    runtimePackageKind: 'unknown',
+    runtimeFiles: [],
+    runtimeIssues: [],
+    runtimeCapabilities: {
+      hasServer: false,
+      hasCudaRuntime: false,
+      hasLlamaDll: false,
+    },
   }
-  const templateKwargs = parseChatTemplateKwargs(config.chat_template_kwargs)
-  if (templateKwargs) {
-    body.chat_template_kwargs = templateKwargs
+
+  if (!info.serverDirExists) {
+    return info
   }
-  return body
+
+  try {
+    const filesAll = readdirSync(serverDir, { withFileTypes: true })
+      .filter(entry => entry.isFile())
+      .map(entry => entry.name)
+    const lower = filesAll.map(file => file.toLowerCase())
+    const files = filesAll.slice(0, 80)
+    const hasConfiguredServer = existsSync(String(config.llama_server_path || ''))
+    const hasServer = hasConfiguredServer || lower.includes('llama-server.exe')
+    const hasCudaRuntime = lower.some(file => /^cudart.*\.dll$/.test(file) || /^cublas.*\.dll$/.test(file))
+    const hasLlamaDll = lower.some(file => /^llama.*\.dll$/.test(file) || /^ggml.*\.dll$/.test(file))
+    info.runtimeCapabilities = { hasServer, hasCudaRuntime, hasLlamaDll }
+    info.runtimeFiles = files
+    info.runtimePackageKind = hasServer
+      ? 'llama-server-package'
+      : hasCudaRuntime && !hasLlamaDll
+        ? 'cuda-runtime-only'
+        : hasCudaRuntime || hasLlamaDll
+          ? 'runtime-missing-server'
+          : 'missing-server'
+    if (!hasServer) {
+      info.runtimeIssues.push({
+        id: 'missing-server',
+        level: 'blocked',
+        message: '运行目录里没有 llama-server.exe。',
+        action: '重新选择完整 llama.cpp Windows 包目录。',
+      })
+    }
+    if (hasServer && hasCudaRuntime && !lower.some(file => /^ggml-cuda.*\.dll$/.test(file))) {
+      info.runtimeIssues.push({
+        id: 'cuda-dll-hint-missing',
+        level: 'warning',
+        message: '看到 CUDA 运行库，但没有看到 ggml-cuda*.dll；如果 GPU 启动失败，请换完整 CUDA 版包。',
+        action: '这不是启动阻塞项，先启动；失败时按日志补齐 CUDA 版 DLL。',
+      })
+    }
+  } catch {
+    info.runtimePackageKind = 'unreadable'
+    info.runtimeIssues.push({
+      id: 'runtime-dir-unreadable',
+      level: 'warning',
+      message: '运行目录无法读取，无法提前检查 DLL。',
+      action: '如果启动失败，请确认目录权限和完整解压状态。',
+    })
+  }
+
+  return info
 }
 
 function validation(config) {
+  const runtimeInfo = runtimePackageInfo(config)
   return {
     configExists: config.launch_mode !== 'launcher' || existsSync(config.config_path),
     launcherExists: config.launch_mode !== 'launcher' || existsSync(config.launcher_path),
     serverExists: existsSync(config.llama_server_path),
     modelExists: existsSync(config.model),
     mmprojExists: !config.mmproj || existsSync(config.mmproj),
+    ...runtimeInfo,
   }
 }
 
@@ -749,6 +896,30 @@ async function buildAttachment(filePath) {
   }
 
   return attachment
+}
+
+async function buildAttachmentsFromPaths(filePaths) {
+  const paths = Array.from(new Set((Array.isArray(filePaths) ? filePaths : [])
+    .map(filePath => String(filePath || '').trim())
+    .filter(Boolean)))
+    .slice(0, 64)
+
+  const attachments = []
+  for (const filePath of paths) {
+    try {
+      attachments.push(await buildAttachment(filePath))
+    } catch (error) {
+      attachments.push({
+        path: filePath,
+        name: path.basename(filePath),
+        size: 0,
+        mime: mimeForFile(filePath),
+        kind: 'file',
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+  return attachments
 }
 
 async function appState() {
@@ -846,8 +1017,8 @@ function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1380,
     height: 900,
-    minWidth: 1120,
-    minHeight: 720,
+    minWidth: 760,
+    minHeight: 640,
     title: 'Llama.cpp Desktop',
     backgroundColor: '#F7F7F4',
     icon: iconPath,
@@ -997,11 +1168,148 @@ function registerIpc() {
   ipcMain.handle('llama:test-health', async (_event, payload) => {
     const config = normalizeConfig(payload.config)
     const url = localUrl(config)
+    const endpointBase = `${url.replace(/\/+$/, '')}/v1`
+    const chatCompletionsUrl = `${url.replace(/\/+$/, '')}/v1/chat/completions`
+    const startedAt = Date.now()
+    const checks = []
+    async function checkEndpoint(id, targetUrl, options = {}) {
+      try {
+        const response = await fetch(targetUrl, {
+          method: options.method || 'GET',
+          signal: AbortSignal.timeout(options.timeout || 3500),
+          headers: options.headers || undefined,
+        })
+        const ok = options.acceptStatus ? options.acceptStatus(response.status) : response.ok
+        checks.push({ id, ok, status: response.status, url: targetUrl })
+        return { ok, status: response.status, response }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        checks.push({ id, ok: false, status: 0, url: targetUrl, message })
+        return { ok: false, status: 0, error, message }
+      }
+    }
+
+    const base = await checkEndpoint('base', url)
+    if (!base.ok) {
+      return {
+        ok: false,
+        status: base.status,
+        url,
+        endpointBase,
+        kind: base.status === 0 ? 'network-error' : 'http-error',
+        checks,
+        message: base.message || `HTTP ${base.status}`,
+        nextAction: '先确认服务已启动；如果端口被占用，换成 8081 后重试。',
+        latencyMs: Date.now() - startedAt,
+      }
+    }
+
+    const models = await checkEndpoint('models', `${endpointBase}/models`)
+    if (!models.ok) {
+      return {
+        ok: false,
+        status: models.status,
+        url,
+        endpointBase,
+        kind: 'not-openai-compatible',
+        checks,
+        message: `/v1/models unavailable: HTTP ${models.status}`,
+        nextAction: '端口有响应但不是 OpenAI 兼容接口；确认 Base URL 指向当前 llama.cpp server。',
+        latencyMs: Date.now() - startedAt,
+      }
+    }
+
+    const chat = await checkEndpoint('chat', chatCompletionsUrl, {
+      method: 'OPTIONS',
+      acceptStatus: status => [200, 204, 400, 405].includes(status),
+      timeout: 2500,
+    })
+    if (!chat.ok) {
+      return {
+        ok: false,
+        status: chat.status,
+        url,
+        endpointBase,
+        kind: 'not-openai-compatible',
+        checks,
+        message: `/v1/chat/completions unavailable: HTTP ${chat.status}`,
+        nextAction: '端口能响应，但 Chat Completions 路由不可用；确认第三方客户端没有连到旧服务或错误进程。',
+        latencyMs: Date.now() - startedAt,
+      }
+    }
+
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(3500) })
-      return { ok: response.ok, status: response.status, url }
+      return {
+        ok: true,
+        status: models.status,
+        url,
+        endpointBase,
+        kind: 'openai-compatible',
+        checks,
+        nextAction: '复制 OpenAI Base URL 到第三方客户端。',
+        latencyMs: Date.now() - startedAt,
+      }
     } catch (error) {
-      return { ok: false, status: 0, url, message: error instanceof Error ? error.message : String(error) }
+      return {
+        ok: false,
+        status: 0,
+        url,
+        endpointBase,
+        kind: 'network-error',
+        checks,
+        message: error instanceof Error ? error.message : String(error),
+        nextAction: '检查端口占用或重新启动服务。',
+        latencyMs: Date.now() - startedAt,
+      }
+    }
+  })
+
+  ipcMain.handle('llama:get-system-info', async () => ({
+    platform: process.platform,
+    arch: process.arch,
+    cpuModel: os.cpus()?.[0]?.model || '',
+    cpuThreads: os.cpus()?.length || 0,
+    totalMemoryGB: Math.round((os.totalmem() / 1024 / 1024 / 1024) * 10) / 10,
+    freeMemoryGB: Math.round((os.freemem() / 1024 / 1024 / 1024) * 10) / 10,
+    gpus: await getGpuInfo(),
+  }))
+
+  ipcMain.handle('llama:inspect-port', async (_event, payload) => {
+    const config = normalizeConfig(payload?.config || {})
+    return inspectPort(config.port)
+  })
+
+  ipcMain.handle('llama:client-smoke-test', async (_event, payload) => {
+    const config = normalizeConfig(payload?.config || {})
+    const url = serviceUrls(config).chatCompletionsUrl
+    const startedAt = Date.now()
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...buildChatRequestBody(config, [{ role: 'user', content: 'ping' }], false),
+          max_tokens: 8,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(12000),
+      })
+      const text = await response.text().catch(() => '')
+      return {
+        ok: response.ok,
+        status: response.status,
+        url,
+        latencyMs: Date.now() - startedAt,
+        message: response.ok ? 'OpenAI-compatible chat smoke test passed.' : text.slice(0, 500) || `HTTP ${response.status}`,
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        status: 0,
+        url,
+        latencyMs: Date.now() - startedAt,
+        message: error instanceof Error ? error.message : String(error),
+      }
     }
   })
 
@@ -1233,22 +1541,11 @@ function registerIpc() {
       return []
     }
 
-    const attachments = []
-    for (const filePath of result.filePaths) {
-      try {
-        attachments.push(await buildAttachment(filePath))
-      } catch (error) {
-        attachments.push({
-          path: filePath,
-          name: path.basename(filePath),
-          size: 0,
-          mime: mimeForFile(filePath),
-          kind: 'file',
-          error: error instanceof Error ? error.message : String(error),
-        })
-      }
-    }
-    return attachments
+    return buildAttachmentsFromPaths(result.filePaths)
+  })
+
+  ipcMain.handle('llama:import-attachments', async (_event, payload) => {
+    return buildAttachmentsFromPaths(payload?.paths || [])
   })
 
   ipcMain.handle('llama:reveal-path', async (_event, payload) => {

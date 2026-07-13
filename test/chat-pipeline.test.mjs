@@ -1,7 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  buildChatRequestBody,
   buildRequestMessages,
+  chatQualityDefaults,
   normalizeChatTemplateKwargs,
   extractStreamDelta,
   createRequestRegistry,
@@ -40,6 +42,75 @@ test('normalizes JSON and CLI chat-template-kwargs forms', () => {
     normalizeChatTemplateKwargs('--chat-template-kwargs \'{\\"enable_thinking\\":false}\''),
     { enable_thinking: false },
   )
+})
+
+test('quality defaults match llama.cpp web reasoning-friendly sampling', () => {
+  assert.deepEqual(chatQualityDefaults('quality'), {
+    chat_quality_mode: 'quality',
+    chat_template_kwargs: '',
+    temp: 1,
+    top_k: 20,
+    top_p: 0.95,
+    min_p: 0.05,
+    presence_penalty: 0,
+    repeat_penalty: '',
+    expand_thinking: false,
+    timings_per_token: true,
+  })
+  assert.equal(chatQualityDefaults('fast').chat_template_kwargs, '{"enable_thinking": false}')
+})
+
+test('chat request body sends visible sampling controls and native timing request', () => {
+  const body = buildChatRequestBody({
+    model: 'G:/models/Qwen.gguf',
+    temp: 1,
+    top_k: 20,
+    top_p: 0.95,
+    min_p: 0.05,
+    presence_penalty: 0,
+    repeat_penalty: 1,
+    n_predict: 512,
+    chat_template_kwargs: '',
+  }, [{ role: 'user', content: 'write code' }], true)
+
+  assert.deepEqual(body, {
+    model: 'Qwen.gguf',
+    messages: [{ role: 'user', content: 'write code' }],
+    temperature: 1,
+    top_k: 20,
+    top_p: 0.95,
+    min_p: 0.05,
+    presence_penalty: 0,
+    repeat_penalty: 1,
+    max_tokens: 512,
+    stream: true,
+    timings_per_token: true,
+  })
+  assert.equal('chat_template_kwargs' in body, false)
+})
+
+test('quality request avoids reasoning overkill for simple prompts', () => {
+  const body = buildChatRequestBody({
+    model: 'G:/models/Qwen.gguf',
+    chat_quality_mode: 'quality',
+    n_predict: -1,
+    chat_template_kwargs: '',
+  }, [{ role: 'user', content: '你好' }], true)
+
+  assert.deepEqual(body.chat_template_kwargs, { enable_thinking: false })
+  assert.equal(body.max_tokens, 512)
+})
+
+test('quality request keeps reasoning for substantial prompts with a bounded output', () => {
+  const body = buildChatRequestBody({
+    model: 'G:/models/Qwen.gguf',
+    chat_quality_mode: 'quality',
+    n_predict: -1,
+    chat_template_kwargs: '',
+  }, [{ role: 'user', content: '按照你的想法写一个粒子网页，要求完整 HTML、CSS 和 JavaScript，并解释设计思路。' }], true)
+
+  assert.equal('chat_template_kwargs' in body, false)
+  assert.equal(body.max_tokens, 4096)
 })
 
 test('extracts structured reasoning fields without losing content', () => {

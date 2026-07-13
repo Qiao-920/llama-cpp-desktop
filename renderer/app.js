@@ -14,6 +14,24 @@ import {
   readinessChecklist,
   terminalDiagnosis,
 } from './lib/product-insights.js'
+import {
+  clientSmokePlan,
+  downloadGuidance,
+  environmentIntegrity,
+  firstRunSteps,
+  hardwareRecommendation,
+  integrationGuide,
+  modelCapabilityCatalog,
+  modelRecommendation,
+  multimodalAdvice,
+  performanceHints,
+  portDiagnosis,
+  portRepairPlan,
+  releaseCandidateChecklist,
+  shouldShowFirstRunWizard,
+  startupDiagnosis,
+  supportBundleText,
+} from './lib/feedback-repair.js'
 
 const sections = [
   ['chat', '对话', '桌面端直接使用模型'],
@@ -28,16 +46,21 @@ const sections = [
 const promptSeeds = ['你现在是什么模型', '分析一下内容', '写一个 API 请求示例', '生成 OpenAI 兼容配置']
 const settingsTabs = [
   ['overview', '&#9881;', '概述', '服务入口与基础运行信息'],
+  ['rescue', '&#9874;', '启动救援', '新手启动、接入和卡顿排查'],
   ['display', '&#128421;', '展示', '模型标签、模板与显示项'],
   ['sampling', '&#9661;', '采样', '温度、Top-K 与 Top-P'],
   ['penalty', '&#9651;', '惩罚', '重复、存在与最小采样'],
   ['io', '&#128452;', '进出口', '模型、服务端与路径'],
   ['mcp', '&#128206;', 'MCP', '预留给扩展和工具接入'],
   ['developer', '&lt;/&gt;', '开发者', '线程、GPU 与批处理'],
+  ['appearance', '&#9681;', '外观', '主题、字体和阅读观感'],
   ['logs', '&#128196;', '日志', '当前 llama.cpp 服务输出'],
 ]
 
 const appEl = document.getElementById('app')
+const STREAM_RENDER_INTERVAL_MS = 100
+let pendingStreamRenderIndex = null
+let streamRenderTimer = null
 
 const state = {
   active: 'chat',
@@ -57,16 +80,28 @@ const state = {
   chatMessages: [],
   chatInput: '',
   attachments: [],
+  draggingFiles: false,
+  dragDepth: 0,
+  openThinkingMessages: new Set(),
+  closedThinkingMessages: new Set(),
   attachmentMenuOpen: false,
   attachmentMenuPosition: null,
   streamRequestId: '',
   preview: null,
+  previewError: '',
   modelInfo: null,
   modelInfoOpen: false,
   chatBusy: false,
   dirty: false,
   busy: false,
   settingsOpen: false,
+  firstRunWizardOpen: false,
+  firstRunWizardSeen: false,
+  health: null,
+  runCheckExpanded: false,
+  portInspection: null,
+  systemInfo: null,
+  clientSmoke: null,
   toast: '',
 }
 
@@ -93,6 +128,36 @@ function currentSettingsTabId() {
 
 function currentSettingsTabMeta() {
   return settingsTabs.find(([id]) => id === currentSettingsTabId()) || settingsTabs[0]
+}
+
+function effectiveThemeMode() {
+  const mode = state.config?.theme_mode || 'system'
+  if (mode === 'light' || mode === 'dark') return mode
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function applyAppearancePreferences() {
+  const theme = effectiveThemeMode()
+  const font = state.config?.chat_font || 'default'
+  document.body.classList.toggle('theme-dark', theme === 'dark')
+  document.body.classList.toggle('theme-light', theme !== 'dark')
+  document.body.classList.toggle('font-sans', font === 'sans')
+  document.body.classList.toggle('font-system', font === 'system')
+  document.body.classList.toggle('font-readable', font === 'readable')
+  document.body.dataset.themeMode = state.config?.theme_mode || 'system'
+  document.body.dataset.chatFont = font
+}
+
+function openSettingsSection(section = 'overview') {
+  state.active = settingsTabs.some(([id]) => id === section) ? section : 'overview'
+  state.settingsOpen = true
+  state.firstRunWizardOpen = false
+  state.attachmentMenuOpen = false
+  state.attachmentMenuPosition = null
+}
+
+function thinkingMessageKey(message, messageIndex) {
+  return `${message?.createdAt || 'message'}:${messageIndex}`
 }
 
 function renderCopyIcon() {
@@ -139,6 +204,12 @@ function renderSettingsTabIcon(kind) {
         <path d="M9 5.2v3.9l2.4 1.7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
       </svg>
     `,
+    rescue: `
+      <svg viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+        <path d="M9 2.7 14 4.6v3.9c0 3.2-1.9 5.6-5 6.8-3.1-1.2-5-3.6-5-6.8V4.6L9 2.7Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path>
+        <path d="M6.4 9.1h5.2M9 6.5v5.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path>
+      </svg>
+    `,
     display: `
       <svg viewBox="0 0 18 18" aria-hidden="true" focusable="false">
         <rect x="2.6" y="3.4" width="12.8" height="9.2" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"></rect>
@@ -174,6 +245,12 @@ function renderSettingsTabIcon(kind) {
     developer: `
       <svg viewBox="0 0 18 18" aria-hidden="true" focusable="false">
         <path d="m7.2 5.4-3 3.6 3 3.6M10.8 5.4l3 3.6-3 3.6M9.9 4.6 8.1 13.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+    `,
+    appearance: `
+      <svg viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+        <path d="M9 2.6a6.4 6.4 0 1 0 0 12.8 5.1 5.1 0 0 1 0-12.8Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path>
+        <path d="M9 2.6v12.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path>
       </svg>
     `,
     logs: `
@@ -326,6 +403,20 @@ function splitCodeParts(content) {
   if (cursor < content.length) {
     parts.push({ type: 'text', value: content.slice(cursor) })
   }
+  return parts.flatMap(part => part.type === 'text' ? splitLooseHtmlParts(part.value) : [part])
+}
+
+function splitLooseHtmlParts(text) {
+  const value = String(text || '')
+  const looseHtmlPattern = /(?:<!doctype\s+html[^]*?<\/html>|<html[\s\S]*?<\/html>)/i
+  const match = looseHtmlPattern.exec(value)
+  if (!match) return value ? [{ type: 'text', value }] : []
+
+  const parts = []
+  if (match.index > 0) parts.push({ type: 'text', value: value.slice(0, match.index) })
+  parts.push({ type: 'code', language: 'html', value: match[0] })
+  const end = match.index + match[0].length
+  if (end < value.length) parts.push({ type: 'text', value: value.slice(end) })
   return parts
 }
 
@@ -340,6 +431,25 @@ function canPreviewCode(language, code) {
   return ['html', 'htm', 'svg'].includes(lang) || /<!doctype|<html|<body|<style|<script/i.test(code)
 }
 
+function validateCodePreview(language, code) {
+  if (!canPreviewCode(language, code)) return ''
+  const value = String(code || '').trim()
+  const lang = String(language || '').toLowerCase()
+  const looksLikeHtml = ['html', 'htm'].includes(lang) || /<!doctype|<html|<body|<canvas|<script|<style/i.test(value)
+  if (!looksLikeHtml) return ''
+
+  if (/<html[\s>]/i.test(value) && !/<\/html>/i.test(value)) {
+    return '预览代码不完整：缺少 </html> 结束标签。请让模型继续补全后再预览。'
+  }
+  if (/<script[\s>]/i.test(value) && !/<\/script>/i.test(value)) {
+    return '预览代码不完整：缺少 </script> 结束标签。请让模型继续补全后再预览。'
+  }
+  if (/<canvas[\s>]/i.test(value) && !/requestAnimationFrame|setInterval|setTimeout/i.test(value)) {
+    return '预览代码不完整：Canvas 粒子页缺少 requestAnimationFrame 动画循环。请让模型继续生成完整脚本。'
+  }
+  return ''
+}
+
 function estimateTokens(text) {
   const value = String(text || '').trim()
   if (!value) return 0
@@ -349,14 +459,66 @@ function estimateTokens(text) {
   return Math.max(1, Math.round(cjk * 0.9 + latinTokens * 1.25))
 }
 
+function chatQualityDefaults(mode = 'quality') {
+  if (mode === 'fast') {
+    return {
+      chat_quality_mode: 'fast',
+      chat_template_kwargs: '{"enable_thinking": false}',
+      temp: 0.8,
+      top_k: 20,
+      top_p: 0.95,
+      min_p: 0.05,
+      presence_penalty: 0,
+      repeat_penalty: '',
+      expand_thinking: false,
+    }
+  }
+  return {
+    chat_quality_mode: 'quality',
+    chat_template_kwargs: '',
+    temp: 1,
+    top_k: 20,
+    top_p: 0.95,
+    min_p: 0.05,
+    presence_penalty: 0,
+    repeat_penalty: '',
+    expand_thinking: false,
+  }
+}
+
+function applyChatQualityMode(mode) {
+  const defaults = chatQualityDefaults(mode)
+  Object.assign(state.config, defaults)
+}
+
+function responseStats(raw, content, latencyMs) {
+  const usage = raw?.usage || {}
+  const timings = raw?.timings || {}
+  const completionTokens = usage.completion_tokens || timings.predicted_n || estimateTokens(content)
+  const totalTokens = usage.total_tokens || completionTokens
+  const nativeTps = Number(timings.predicted_per_second)
+  const speedSource = Number.isFinite(nativeTps) && nativeTps > 0 ? 'native' : ''
+  return {
+    tokens: completionTokens || totalTokens || estimateTokens(content),
+    speed: speedSource ? `${nativeTps.toFixed(2)} t/s` : '',
+    speedSource,
+  }
+}
+
+function generatedTextForStats(message) {
+  return [message?.content, message?.thinking].filter(Boolean).join('\n\n')
+}
+
 function updateLiveStats(message) {
   if (!message || message.role !== 'assistant') return
   const startedAt = message.startedAt || message.createdAt || Date.now()
   const latencyMs = Math.max(1, Date.now() - startedAt)
-  const tokens = message.tokens || estimateTokens(message.content)
+  const generatedText = generatedTextForStats(message)
+  const tokens = message.tokens || estimateTokens(generatedText)
   message.latencyMs = latencyMs
-  message.estimatedTokens = estimateTokens(message.content)
-  message.speed = tokens ? `${(Number(tokens) / (latencyMs / 1000)).toFixed(2)} t/s` : ''
+  message.estimatedTokens = estimateTokens(generatedText)
+  message.liveSpeed = tokens ? `${(Number(tokens) / (latencyMs / 1000)).toFixed(2)} t/s` : ''
+  message.liveSpeedSource = 'estimate'
 }
 
 function renderCodeAwareText(text, messageIndex, counter) {
@@ -374,7 +536,8 @@ function renderCodeAwareText(text, messageIndex, counter) {
             <span>${escapeHtml(language.toUpperCase())}</span>
             <div>
               <button type="button" data-action="copy-code" data-message-index="${messageIndex}" data-code-index="${codeIndex}" title="复制代码">复制</button>
-              ${previewable ? `<button type="button" class="eye-btn" data-action="preview-code" data-message-index="${messageIndex}" data-code-index="${codeIndex}" title="预览">&#128065;</button>` : ''}
+              ${previewable ? `<button type="button" data-action="preview-code" data-message-index="${messageIndex}" data-code-index="${codeIndex}" title="在客户端里预览网页">预览网页</button>` : ''}
+              ${previewable ? `<button type="button" data-action="download-code" data-message-index="${messageIndex}" data-code-index="${codeIndex}" title="保存为 HTML 文件">保存 HTML</button>` : ''}
             </div>
           </figcaption>
           <pre><code>${escapeHtml(codeValue)}</code></pre>
@@ -382,6 +545,24 @@ function renderCodeAwareText(text, messageIndex, counter) {
       `
     })
     .join('')
+}
+
+const THINKING_END_MARKERS = [
+  /\(\s*End of thought process\s*\)/i,
+  /(?:^|\n)\s*End of thought process\s*[:：]?/i,
+  /(?:^|\n)\s*(?:Okay,\s*I'll write:|I(?:'|’)ll output exactly that\.?|最终答案\s*[:：]|回答\s*[:：])/i,
+]
+
+function looksLikeReasoningText(text) {
+  return /(?:Analyze the User|Determine the Intent|Formulate the Response|Drafting the response|Selecting the Best Response|Final Polish|思考|推理|分析用户|判断意图)/i.test(String(text || ''))
+}
+
+function thinkingEndBoundary(text) {
+  for (const pattern of THINKING_END_MARKERS) {
+    const match = pattern.exec(text)
+    if (match) return { index: match.index, endIndex: match.index + match[0].length }
+  }
+  return null
 }
 
 function splitThinkingOutput(content) {
@@ -429,6 +610,14 @@ function splitThinkingOutput(content) {
     }
   }
 
+  const naturalBoundary = thinkingEndBoundary(text)
+  if (naturalBoundary && looksLikeReasoningText(text.slice(0, naturalBoundary.index))) {
+    return {
+      answer: cleanMarkers(text.slice(naturalBoundary.endIndex)),
+      thoughts: [cleanMarkers(text.slice(0, naturalBoundary.index))].filter(Boolean),
+    }
+  }
+
   return { answer: text, thoughts: [] }
 }
 
@@ -449,11 +638,14 @@ function renderMessageContent(message, messageIndex) {
   const showRawOutput = Boolean(state.config?.show_raw_output)
   const showThinking = state.config?.show_thinking !== false && !showRawOutput
   const expandThinking = Boolean(state.config?.expand_thinking)
+  const thinkingKey = thinkingMessageKey(message, messageIndex)
+  const thinkingOpen = state.openThinkingMessages.has(thinkingKey) ||
+    (expandThinking && !state.closedThinkingMessages.has(thinkingKey))
 
   if (showThinking && thoughts.length > 0) {
     output.push(`
-      <details class="think-block" ${expandThinking ? 'open' : ''}>
-        <summary>思考过程</summary>
+      <details class="think-block" data-thinking-key="${escapeAttribute(thinkingKey)}" ${thinkingOpen ? 'open' : ''}>
+        <summary data-action="toggle-thinking" data-thinking-key="${escapeAttribute(thinkingKey)}" data-message-index="${messageIndex}">思考过程</summary>
         ${renderCodeAwareText(thoughts.join('\n\n'), messageIndex, counter)}
       </details>
     `)
@@ -465,14 +657,16 @@ function renderMessageContent(message, messageIndex) {
     output.push(renderCodeAwareText(answer, messageIndex, counter))
   }
 
-  if (showRawOutput && (content || message.thinking)) {
+  if (showRawOutput && (content || message.thinking) && !message.streaming) {
     const rawOutput = [message.thinking ? `Thinking:\n${message.thinking}` : '', content].filter(Boolean).join('\n\n')
     output.push(`
-      <details class="raw-output-block" ${message.streaming ? 'open' : ''}>
+      <details class="raw-output-block">
         <summary>原始输出</summary>
         <pre>${escapeHtml(rawOutput)}</pre>
       </details>
     `)
+  } else if (showRawOutput && (content || message.thinking) && message.streaming) {
+    output.push('<div class="markdown-text muted-note">原始输出将在生成结束后显示。</div>')
   }
 
   return output.join('') || renderTextBlock(content)
@@ -638,16 +832,38 @@ function buildApiMessages(messages) {
     if (message.role === 'system') {
       const systemText = String(message.content || '').trim()
       if (/^(发送失败|重试失败|请求失败|启动失败)[：:]/.test(systemText)) continue
+      if (systemText === '系统消息：请在这里写给模型的长期要求，发送下一条消息时会一起带上。') continue
       systemMessages.push(systemText)
       continue
     }
 
-    conversation.push(message)
+    const next = message.role === 'assistant'
+      ? sanitizeAssistantForContext(message)
+      : sanitizeUserForContext(message)
+    if (next) conversation.push(next)
   }
 
   return systemMessages.length
     ? [{ role: 'system', content: systemMessages.filter(Boolean).join('\n\n') }, ...conversation]
     : conversation
+}
+
+function sanitizeAssistantForContext(message) {
+  const content = String(message?.content || '').trim()
+  if (!content) return null
+  if (/^(发送失败|重试失败|请求失败|启动失败|模型返回了空内容)[：:。]/.test(content)) return null
+  const next = { role: 'assistant', content }
+  delete next.thinking
+  return next
+}
+
+function sanitizeUserForContext(message) {
+  const content = String(message?.content || '').trim()
+  const attachments = Array.isArray(message?.attachments) ? message.attachments : []
+  if (!content && attachments.length === 0) return null
+  const next = { role: 'user', content }
+  if (attachments.length) next.attachments = attachments
+  return next
 }
 
 function openSession(sessionId) {
@@ -688,8 +904,32 @@ function attachmentLabel(kind) {
   }[kind] || '文件'
 }
 
+function flushStreamRender() {
+  if (streamRenderTimer) {
+    window.clearTimeout(streamRenderTimer)
+    streamRenderTimer = null
+  }
+  const index = pendingStreamRenderIndex
+  pendingStreamRenderIndex = null
+  if (index !== null && index !== undefined) {
+    updateMessageDom(index)
+  }
+}
+
+function scheduleStreamRender(index) {
+  pendingStreamRenderIndex = index
+  if (streamRenderTimer) return
+  streamRenderTimer = window.setTimeout(flushStreamRender, STREAM_RENDER_INTERVAL_MS)
+}
+
 function readinessSummary() {
   const rows = readinessChecklist({
+    config: state.config || {},
+    validation: state.validation,
+    status: state.status,
+    dirty: state.dirty,
+  })
+  const repair = startupDiagnosis({
     config: state.config || {},
     validation: state.validation,
     status: state.status,
@@ -712,19 +952,32 @@ function readinessSummary() {
   return {
     rows,
     counts,
-    nextAction: next?.state === 'ready' && counts.warn === 0 && counts.block === 0 ? '可以开始对话' : next?.action || '检查本地运行状态',
+    nextAction: repair.level === 'good' && next?.state === 'ready' && counts.warn === 0 && counts.block === 0 ? '可以开始对话' : repair.action || next?.action || '检查本地运行状态',
   }
 }
 
 function renderReadinessStrip() {
-  const { counts, nextAction } = readinessSummary()
+  const { rows, counts, nextAction } = readinessSummary()
   return `
-    <div class="run-check-strip" aria-label="运行检查">
-      <span class="run-check-title">运行检查</span>
-      <span class="run-check-count pass">通过 ${counts.pass}</span>
-      <span class="run-check-count warn">提醒 ${counts.warn}</span>
-      <span class="run-check-count block">阻塞 ${counts.block}</span>
-      <span class="run-check-next">${escapeHtml(nextAction)}</span>
+    <div class="run-check-shell">
+      <button type="button" class="run-check-strip" data-action="toggle-run-check" aria-label="运行检查" aria-expanded="${state.runCheckExpanded ? 'true' : 'false'}">
+        <span class="run-check-title">运行检查</span>
+        <span class="run-check-count pass">通过 ${counts.pass}</span>
+        <span class="run-check-count warn">提醒 ${counts.warn}</span>
+        <span class="run-check-count block">阻塞 ${counts.block}</span>
+        <span class="run-check-next">${escapeHtml(nextAction)}</span>
+      </button>
+      ${state.runCheckExpanded ? `
+        <div class="run-check-details">
+          ${rows.map(row => `
+            <div class="run-check-detail ${escapeHtml(row.state)}">
+              ${repairBadge(row.state)}
+              <strong>${escapeHtml(row.label)}</strong>
+              <span>${escapeHtml(row.action)}</span>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
     </div>
   `
 }
@@ -819,14 +1072,16 @@ function renderMessageActions(index, message) {
 
 function renderMessageMeta(message) {
   if (message.role !== 'assistant') return ''
-  const tokens = message.tokens || message.estimatedTokens || estimateTokens(message.content)
+  const tokens = message.tokens || message.estimatedTokens || estimateTokens(generatedTextForStats(message))
   const latencyMs = message.latencyMs || (message.streaming ? Date.now() - (message.startedAt || message.createdAt || Date.now()) : 0)
-  const speed = message.speed || (tokens && latencyMs ? `${(Number(tokens) / (latencyMs / 1000)).toFixed(2)} t/s` : '')
+  const nativeSpeed = message.speedSource === 'native' && message.speed ? message.speed : ''
+  const estimatedSpeed = !nativeSpeed && message.liveSpeed ? message.liveSpeed : ''
   const pieces = [
     `<span class="model-pill">◇ ${escapeHtml(message.model || modelName())}</span>`,
-    `<span>▦ ${escapeHtml(tokens || 0)} 个代币</span>`,
-    latencyMs ? `<span>◷ ${(latencyMs / 1000).toFixed(1)}s</span>` : '<span>◷ 0.0s</span>',
-    speed ? `<span>⌁ ${escapeHtml(speed)}</span>` : '',
+    `<span>▦ 输出 ${escapeHtml(tokens || 0)} tokens</span>`,
+    latencyMs ? `<span>◷ 总耗时 ${(latencyMs / 1000).toFixed(1)}s</span>` : '<span>◷ 总耗时 0.0s</span>',
+    nativeSpeed ? `<span>⌁ 生成速率 ${escapeHtml(nativeSpeed)}</span>` : '',
+    estimatedSpeed ? `<span>⌁ 估算速率 ${escapeHtml(estimatedSpeed)}</span>` : '',
     message.streaming ? '<span>生成中</span>' : '',
     message.state === 'cancelling' ? '<span class="message-state cancelling">正在停止</span>' : '',
     message.state === 'cancelled' ? '<span class="message-state cancelled">已停止 · 不会加入上下文</span>' : '',
@@ -930,8 +1185,26 @@ function selectField(name, label, choices, hint = '') {
   const extra = name === 'launch_mode' && directMode
     ? field('llama_bin_dir', 'llama.cpp 原文件目录', { pick: 'dir', hint: '选择包含 llama-server.exe 和 CUDA / ggml DLL 的原始目录。' })
     : ''
+  const choiceLabel = choice => {
+    if (name === 'chat_quality_mode') {
+      if (choice === 'quality') return '质量模式'
+      if (choice === 'fast') return '极速模式'
+    }
+    if (name === 'theme_mode') {
+      if (choice === 'light') return '浅色'
+      if (choice === 'dark') return '深色'
+      if (choice === 'system') return '跟随系统'
+    }
+    if (name === 'chat_font') {
+      if (choice === 'default') return '默认'
+      if (choice === 'sans') return 'Sans'
+      if (choice === 'system') return '系统'
+      if (choice === 'readable') return '易读'
+    }
+    return choice || 'auto'
+  }
   const options = choices
-    .map(choice => `<option value="${escapeHtml(choice)}" ${String(choice) === String(value) ? 'selected' : ''}>${escapeHtml(choice || 'auto')}</option>`)
+    .map(choice => `<option value="${escapeHtml(choice)}" ${String(choice) === String(value) ? 'selected' : ''}>${escapeHtml(choiceLabel(choice))}</option>`)
     .join('')
   return `
     <label class="field">
@@ -982,7 +1255,7 @@ function renderSidebar() {
   return `
     <aside class="sidebar">
       <div class="brand-row">
-        <div class="app-mark">ll</div>
+        <button type="button" class="app-mark sidebar-brand-toggle" data-action="toggle-sidebar" title="${state.sidebarCollapsed ? '展开侧栏' : '收起侧栏'}" aria-label="${state.sidebarCollapsed ? '展开侧栏' : '收起侧栏'}">ll</button>
         <div class="brand-copy">
           <strong>llama.cpp</strong>
           <span>OpenAI compatible local endpoint</span>
@@ -1149,6 +1422,7 @@ function renderModelInfoModal() {
   const info = state.modelInfo || {}
   const { rows, runtimeRows, templateText } = buildBetterModelInfoRows(info)
   const capability = modelCapability({ config: state.config || {}, modelInfo: info })
+  const multimodal = multimodalAdvice({ config: state.config || {}, validation: state.validation || {} })
   const capabilityRows = buildCapabilityRows(info, capability)
   const body = info.loading
     ? '<div class="model-info-empty">正在读取当前模型信息...</div>'
@@ -1201,6 +1475,7 @@ function renderModelInfoModal() {
                 .join('')}
             </div>
             <p class="capability-detail">${escapeHtml(capability.detail)}</p>
+            <p class="capability-detail">${escapeHtml(`${multimodal.title}：${multimodal.action}`)}</p>
           </div>
         </div>
         <div class="model-template-card">
@@ -1229,6 +1504,8 @@ function renderModelInfoModal() {
 
 function renderChat() {
   const cancelling = Boolean(assistantForRequest(state.streamRequestId)?.cancelRequested)
+  const isEmptyChat = state.chatMessages.length === 0
+  const isSetupOnboarding = isEmptyChat && state.status.state !== 'running' && !state.chatBusy
   const messages = state.chatMessages.length
     ? state.chatMessages
         .map((message, index) => {
@@ -1260,14 +1537,12 @@ function renderChat() {
         .join('')
     : `
       <div class="empty-state">
-        <h1>llama.cpp</h1>
-        <p>输入消息，或把本地服务接给 OpenClaw、Claude Code 和任何 OpenAI 兼容客户端。</p>
+        ${renderOnboardingActionPanel(isSetupOnboarding)}
       </div>
     `
-
-  return `
-    <section class="chat-screen ${state.chatMessages.length ? '' : 'empty-chat'}">
-      <div class="chat-feed" id="chatFeed">${messages}</div>
+  const composer = isSetupOnboarding
+    ? ''
+    : `
       <div class="composer-wrap">
         ${renderReadinessStrip()}
         ${renderAttachmentChips(state.attachments, true, 'composer')}
@@ -1286,6 +1561,13 @@ function renderChat() {
         </div>
         <div class="composer-hint">按住 Enter 发送，Shift + Enter 换行</div>
       </div>
+    `
+
+  return `
+    <section class="chat-screen ${isEmptyChat ? 'empty-chat' : ''} ${isSetupOnboarding ? 'setup-onboarding' : ''} ${state.draggingFiles ? 'drag-over' : ''}" data-drop-zone="chat">
+      <div class="chat-feed" id="chatFeed">${messages}</div>
+      ${composer}
+      ${state.draggingFiles ? '<div class="chat-drop-overlay"><strong>松手添加文件</strong><span>图片、音频、PDF、文本和其他文件都会进入当前消息附件。</span></div>' : ''}
     </section>
   `
 }
@@ -1353,7 +1635,8 @@ function renderSettingsContent() {
       <div class="form-grid single">
         ${field('model', '模型文件', { pick: 'gguf', hint: '例如 Qwen3.5-9B.Q4_K_M.gguf。' })}
         ${field('mmproj', 'mmproj 投影文件', { pick: 'gguf', hint: '视觉或多模态模型才需要。' })}
-        ${field('chat_template_kwargs', 'Chat Template Kwargs', { textarea: true, hint: '例如 {"enable_thinking": false}。' })}
+        ${selectField('chat_quality_mode', '对话质量模式', ['quality', 'fast'], '质量模式 = 对齐网页端 Reasoning；极速模式 = 关闭 thinking 换取更短延迟。')}
+        ${field('chat_template_kwargs', 'Chat Template Kwargs', { textarea: true, hint: '质量模式留空，使用模型默认 Reasoning；极速模式会自动写入 {"enable_thinking":false}。' })}
       </div>
     `)}
 
@@ -1490,6 +1773,446 @@ function renderModernSettingsCard(title, text, body) {
   `
 }
 
+function renderOnboardingActionPanel(showRunCheck = false) {
+  const guide = downloadGuidance()
+  const repair = startupDiagnosis({
+    config: state.config || {},
+    validation: state.validation || {},
+    status: state.status || {},
+    dirty: state.dirty,
+  })
+  return `
+    <div class="onboarding-action-panel">
+      <div class="onboarding-primary">
+        <div class="onboarding-copy">
+          <span>Release Candidate · 本地验收版</span>
+          <h1>把本地大模型跑起来</h1>
+          <p>先选完整 llama.cpp 包和 GGUF 模型，再启动服务并检查端口。服务可用后，复制到第三方客户端。</p>
+        </div>
+        <div class="onboarding-status ${escapeHtml(repair.level)}">
+          ${repairBadge(repair.level)}
+          <strong>${escapeHtml(repair.title)}</strong>
+          <em>${escapeHtml(repair.action)}</em>
+        </div>
+        ${showRunCheck ? `<div class="onboarding-run-check">${renderReadinessStrip()}</div>` : ''}
+        <div class="onboarding-actions">
+          <button type="button" class="primary-btn" data-action="open-downloads">官方下载</button>
+          <button type="button" class="outline-btn" data-section="io">选择目录</button>
+          <button type="button" class="outline-btn" data-action="open-first-run-wizard">启动向导</button>
+          <button type="button" class="outline-btn" data-action="copy-feedback-bundle">复制诊断</button>
+        </div>
+      </div>
+      <div class="onboarding-roadmap">
+        <div class="onboarding-steps">
+          ${['选择运行包', '选择 GGUF 模型', '检测硬件并推荐参数', '启动并检查端口', '复制到第三方客户端']
+            .map((item, index) => `<div><span>${index + 1}</span><strong>${escapeHtml(item)}</strong></div>`)
+            .join('')}
+        </div>
+        <p class="onboarding-footnote">${escapeHtml(guide.detail)}</p>
+      </div>
+    </div>
+  `
+}
+
+function repairBadge(level, label) {
+  const text = label || {
+    good: '可用',
+    ready: '就绪',
+    normal: '提醒',
+    pending: '待处理',
+    warning: '注意',
+    blocked: '阻塞',
+  }[level] || level || '提醒'
+  return `<span class="repair-badge ${escapeHtml(level || 'normal')}">${escapeHtml(text)}</span>`
+}
+
+function renderStartupRepairBox(diagnosis) {
+  return `
+    <div class="repair-hero ${escapeHtml(diagnosis.level)}">
+      <div>
+        ${repairBadge(diagnosis.level)}
+        <strong>${escapeHtml(diagnosis.title)}</strong>
+        <p>${escapeHtml(diagnosis.detail)}</p>
+      </div>
+      <em>${escapeHtml(diagnosis.action)}</em>
+    </div>
+  `
+}
+
+function renderFirstRunStepList(steps) {
+  return `
+    <div class="repair-step-list">
+      ${steps
+        .map((step, index) => `
+          <div class="repair-step ${escapeHtml(step.state)}">
+            <span>${index + 1}</span>
+            <div>
+              <strong>${escapeHtml(step.title)}</strong>
+              <em>${escapeHtml(step.detail)}</em>
+            </div>
+            ${repairBadge(step.state)}
+          </div>
+        `)
+        .join('')}
+    </div>
+  `
+}
+
+function renderPathSnapshot(config, validation) {
+  const rows = [
+    ['llama.cpp 原文件目录', validation.serverDir || config.llama_bin_dir || '未选择', validation.serverDirExists],
+    ['llama-server.exe', config.llama_server_path || '未选择', validation.serverExists],
+    ['GGUF 模型文件', config.model || '未选择', validation.modelExists],
+    ['mmproj 投影文件', config.mmproj || '未选择', !config.mmproj || validation.mmprojExists],
+  ]
+
+  return `
+    <div class="path-snapshot">
+      ${rows
+        .map(([label, value, ok]) => `
+          <div>
+            <span>${escapeHtml(label)}</span>
+            <code title="${escapeAttribute(value)}">${escapeHtml(value)}</code>
+            ${pill(ok, '已找到', '未找到')}
+          </div>
+        `)
+        .join('')}
+    </div>
+    <div class="settings-inline-actions">
+      <button type="button" class="outline-btn" data-section="overview">打开概述参数</button>
+      <button type="button" class="outline-btn" data-section="display">打开模型设置</button>
+      <button type="button" class="outline-btn" data-section="logs">打开日志</button>
+    </div>
+  `
+}
+
+function renderIntegrationRows(guide) {
+  return `
+    <div class="integration-grid">
+      <div>
+        <span>第三方客户端填写</span>
+        <strong>OpenAI Base URL</strong>
+        <code>${escapeHtml(guide.baseUrl)}</code>
+      </div>
+      <div>
+        <span>不要填错成 Base URL 的场景</span>
+        <strong>Chat Completions URL</strong>
+        <code>${escapeHtml(guide.chatCompletionsUrl)}</code>
+      </div>
+      <div>
+        <span>模型名</span>
+        <strong>${escapeHtml(guide.modelName)}</strong>
+        <code>API Key: ${escapeHtml(guide.apiKeyHint)}</code>
+      </div>
+    </div>
+    <div class="settings-inline-actions">
+      <button type="button" class="outline-btn" data-action="copy-integration-guide">复制第三方接入信息</button>
+      <button type="button" class="outline-btn" data-action="health">检查端口</button>
+    </div>
+    <div class="settings-callout">Cherry Studio、Open WebUI、One API 等通常填 Base URL，也就是以 /v1 结尾的地址；/v1/chat/completions 是单个接口地址。</div>
+  `
+}
+
+function renderPerformanceHintList(hints) {
+  if (!hints.length) {
+    return '<div class="repair-empty">暂无明显高风险参数。遇到卡顿时优先看终端日志和系统资源占用。</div>'
+  }
+
+  return `
+    <div class="repair-hint-list">
+      ${hints
+        .map(hint => `
+          <div class="repair-hint ${escapeHtml(hint.level)}">
+            ${repairBadge(hint.level)}
+            <div>
+              <strong>${escapeHtml(hint.title)}</strong>
+              <p>${escapeHtml(hint.detail)}</p>
+              <em>${escapeHtml(hint.action)}</em>
+            </div>
+          </div>
+        `)
+        .join('')}
+    </div>
+  `
+}
+
+function renderEnvironmentIntegrityCard(integrity) {
+  return `
+    <div class="repair-hero ${escapeHtml(integrity.summary.level)}">
+      <div>
+        ${repairBadge(integrity.summary.level)}
+        <strong>${escapeHtml(integrity.summary.title)}</strong>
+        <p>${escapeHtml(integrity.summary.detail)}</p>
+      </div>
+      <em>${escapeHtml(integrity.summary.action)}</em>
+    </div>
+    <div class="repair-hint-list">
+      ${integrity.rows
+        .map(row => `
+          <div class="repair-hint ${escapeHtml(row.state)}">
+            ${repairBadge(row.state)}
+            <div>
+              <strong>${escapeHtml(row.label)}</strong>
+              <p>${escapeHtml(row.detail)}</p>
+              <em>${escapeHtml(row.action)}</em>
+            </div>
+          </div>
+        `)
+        .join('')}
+    </div>
+  `
+}
+
+function renderPortDiagnosisCard(diagnosis) {
+  const checks = Array.isArray(diagnosis.checks) ? diagnosis.checks : []
+  return `
+    <div class="repair-hero ${escapeHtml(diagnosis.level)}">
+      <div>
+        ${repairBadge(diagnosis.level)}
+        <strong>${escapeHtml(diagnosis.title)}</strong>
+        <p>${escapeHtml(diagnosis.detail)}</p>
+      </div>
+      <em>${escapeHtml(diagnosis.action)}</em>
+    </div>
+    <div class="endpoint-checks">
+      ${
+        checks.length
+          ? checks.map(check => `
+              <div>
+                <span>${escapeHtml(check.id || 'check')}</span>
+                <code>${escapeHtml(check.url || '')}</code>
+                ${pill(Boolean(check.ok), `HTTP ${check.status || 200}`, check.status ? `HTTP ${check.status}` : '失败')}
+              </div>
+            `).join('')
+          : '<div><span>尚未检查</span><code>点击“检查端口”后显示 /v1/models 和 chat 路由结果。</code><span class="pill warn">待检查</span></div>'
+      }
+    </div>
+  `
+}
+
+function renderRecommendationCard(recommendation) {
+  return `
+    <div class="recommendation-grid">
+      <div><span>模型规模</span><strong>${escapeHtml(recommendation.sizeClass)}</strong></div>
+      <div><span>ctx_size</span><strong>${escapeHtml(recommendation.profile.ctxSize)}</strong></div>
+      <div><span>n_gpu_layers</span><strong>${escapeHtml(recommendation.profile.gpuLayers)}</strong></div>
+      <div><span>batch_size</span><strong>${escapeHtml(recommendation.profile.batchSize)}</strong></div>
+    </div>
+    <div class="settings-callout">${escapeHtml(recommendation.reason)}</div>
+    ${recommendation.warnings.length ? renderPerformanceHintList(recommendation.warnings.map((warning, index) => ({
+      id: `recommendation-${index}`,
+      level: 'warning',
+      title: '推荐参数提醒',
+      detail: warning,
+      action: '先应用保守参数跑通，再逐步加大。',
+    }))) : ''}
+    <div class="settings-inline-actions">
+      <button type="button" class="outline-btn" data-action="apply-recommended-params">应用推荐参数</button>
+    </div>
+  `
+}
+
+function renderSimpleRows(rows) {
+  return `
+    <div class="closure-rows">
+      ${rows.map(row => `
+        <div class="${escapeHtml(row.state || 'normal')}">
+          <span>${escapeHtml(row.label || row.id)}</span>
+          <strong>${escapeHtml(row.value || row.detail || row.action || '')}</strong>
+          ${row.action ? `<em>${escapeHtml(row.action)}</em>` : ''}
+        </div>
+      `).join('')}
+    </div>
+  `
+}
+
+function renderPortRepairCard(plan) {
+  return `
+    <div class="repair-hero ${escapeHtml(plan.level)}">
+      <div>
+        ${repairBadge(plan.level)}
+        <strong>${escapeHtml(plan.title)}</strong>
+        <p>${escapeHtml(plan.detail)}</p>
+      </div>
+      <em>${escapeHtml(plan.action)}</em>
+    </div>
+    ${plan.processes?.length ? renderSimpleRows(plan.processes.map(item => ({
+      id: `pid-${item.pid}`,
+      label: `PID ${item.pid}`,
+      value: item.name || 'unknown',
+      action: item.state || item.localAddress || '',
+    }))) : '<div class="settings-callout">还没有检测到占用进程；点击“检测端口占用”后显示本机线索。</div>'}
+    <div class="settings-inline-actions">
+      <button type="button" class="outline-btn" data-action="inspect-port">检测端口占用</button>
+      <button type="button" class="outline-btn" data-action="apply-port-fix" ${plan.canApply ? '' : 'disabled'}>改用 ${escapeHtml(plan.suggestedPort || '')}</button>
+    </div>
+  `
+}
+
+function renderDownloadCard(guidance) {
+  return `
+    <div class="repair-hero warning">
+      <div>
+        ${repairBadge('warning', '手动确认')}
+        <strong>${escapeHtml(guidance.title)}</strong>
+        <p>${escapeHtml(guidance.detail)}</p>
+      </div>
+      <em>${escapeHtml(guidance.action)}</em>
+    </div>
+    <div class="settings-inline-actions">
+      <button type="button" class="outline-btn" data-action="open-downloads">打开官方下载页</button>
+      <button type="button" class="outline-btn" data-action="copy-download-guidance">复制下载说明</button>
+    </div>
+    ${renderSimpleRows(guidance.keywords.map(keyword => ({ label: '关键词', value: keyword })))}
+  `
+}
+
+function renderClientSmokeCard(plan) {
+  return `
+    <div class="repair-hero ${escapeHtml(plan.level)}">
+      <div>
+        ${repairBadge(plan.level)}
+        <strong>${escapeHtml(plan.title)}</strong>
+        <p>${escapeHtml(plan.detail)}</p>
+      </div>
+      <em>${escapeHtml(plan.action)}</em>
+    </div>
+    <div class="command-preview compact">
+      <pre>${escapeHtml(plan.templateText)}</pre>
+      <button type="button" class="outline-btn small-btn" data-action="copy-integration-guide">复制</button>
+    </div>
+    <div class="settings-inline-actions">
+      <button type="button" class="outline-btn" data-action="client-smoke-test">本机联调 smoke test</button>
+    </div>
+  `
+}
+
+function renderFeedbackCard() {
+  return `
+    <div class="repair-hero normal">
+      <div>
+        ${repairBadge('normal', '反馈')}
+        <strong>一键复制反馈诊断</strong>
+        <p>自动附带版本、启动命令、端口检查、模型路径和最近状态，方便直接粘贴给排查人员。</p>
+      </div>
+      <em>不自动上传任何信息，由你确认后再发送。</em>
+    </div>
+    <div class="settings-inline-actions">
+      <button type="button" class="outline-btn" data-action="copy-feedback-bundle">复制反馈诊断</button>
+      <button type="button" class="outline-btn" data-action="open-downloads">打开 llama.cpp releases</button>
+    </div>
+  `
+}
+
+function renderRescueSettingsContent() {
+  const config = state.config || {}
+  const validation = state.validation || {}
+  const repair = startupDiagnosis({ config, validation, status: state.status, dirty: state.dirty })
+  const steps = firstRunSteps({ config, validation, status: state.status, dirty: state.dirty })
+  const guide = integrationGuide({ config, status: state.status })
+  const hints = performanceHints({ config })
+  const multimodal = multimodalAdvice({ config, validation })
+  const integrity = environmentIntegrity({ config, validation })
+  const endpointDiagnosis = portDiagnosis(state.health || { ok: null, kind: 'unchecked', url: state.status?.url, message: '尚未检查端口' })
+  const recommendation = modelRecommendation({ config })
+  const download = downloadGuidance()
+  const portRepair = portRepairPlan({ config, status: state.status, inspection: state.portInspection, health: state.health })
+  const hardware = hardwareRecommendation({ config, systemInfo: state.systemInfo || {} })
+  const clientPlan = clientSmokePlan({ config, status: state.status, smoke: state.clientSmoke })
+  const capability = modelCapabilityCatalog({ config, modelInfo: state.modelInfo || {} })
+  const release = releaseCandidateChecklist({ build: { packaged: true, shortcut: true, opened: true, screenshots: 0 } })
+  return `
+    <div class="settings-stack rescue-stack">
+      ${renderModernSettingsCard('启动救援', '把“为什么启动不了”和“下一步点哪里”集中到这一页。', `
+        ${renderStartupRepairBox(repair)}
+        ${renderPathSnapshot(config, validation)}
+        ${renderFirstRunStepList(steps)}
+        <div class="settings-inline-actions">
+          <button type="button" class="outline-btn" data-action="open-first-run-wizard">重新打开首次启动向导</button>
+        </div>
+      `)}
+      ${renderModernSettingsCard('环境完整性', '区分真正阻塞和只是需要留意的运行包问题。', renderEnvironmentIntegrityCard(integrity))}
+      ${renderModernSettingsCard('完整包下载', '避免只下载 cudart/runtime 包导致找不到 server。', renderDownloadCard(download))}
+      ${renderModernSettingsCard('端口诊断', '检查 base URL、/v1/models 和 chat completions 路由。', renderPortDiagnosisCard(endpointDiagnosis))}
+      ${renderModernSettingsCard('端口占用修复', '不杀进程，优先检测并切换到可用端口。', renderPortRepairCard(portRepair))}
+      ${renderModernSettingsCard('硬件推荐参数', '读取本机 CPU/内存/GPU 线索后给保守起点。', `
+        ${renderRecommendationCard(recommendation)}
+        ${renderSimpleRows(hardware.rows)}
+      `)}
+      ${renderModernSettingsCard('第三方接入', '给 Cherry Studio、Open WebUI 等 OpenAI 兼容客户端使用。', renderIntegrationRows(guide))}
+      ${renderModernSettingsCard('第三方联调验证', '先用本机 OpenAI-compatible 请求验证模板。', renderClientSmokeCard(clientPlan))}
+      ${renderModernSettingsCard('模型能力库', '基于文件名和服务端元数据做保守识别，未知时不硬猜。', `
+        <div class="settings-callout">${escapeHtml(capability.title)} · ${escapeHtml(capability.action)}</div>
+        ${renderSimpleRows(capability.rows)}
+      `)}
+      ${renderModernSettingsCard('性能与卡顿风险', '把评论区里最常见的内存、显存、超时问题提前摊开。', `
+        ${renderPerformanceHintList(hints)}
+        <div class="settings-callout">如果启动像卡住，先降 ctx_size、n_gpu_layers 或 batch，再复制支持诊断给排查人员。</div>
+      `)}
+      ${renderModernSettingsCard('反馈入口', '遇到问题时给排查人员一份完整上下文。', renderFeedbackCard())}
+      ${renderModernSettingsCard('发布候选包', '本轮只生成本机验收包，不自动推送正式 release。', `
+        <div class="repair-hero ${escapeHtml(release.summary.level)}">
+          <div>
+            ${repairBadge(release.summary.level)}
+            <strong>${escapeHtml(release.summary.title)}</strong>
+            <p>${escapeHtml(release.summary.detail)}</p>
+          </div>
+          <em>${escapeHtml(release.summary.action)}</em>
+        </div>
+        ${renderSimpleRows(release.rows)}
+      `)}
+      ${renderModernSettingsCard('图片理解', '图片上传不等于模型一定能看图。', `
+        <div class="repair-hero ${escapeHtml(multimodal.level)}">
+          <div>
+            ${repairBadge(multimodal.level)}
+            <strong>${escapeHtml(multimodal.title)}</strong>
+            <p>${escapeHtml(multimodal.detail)}</p>
+          </div>
+          <em>${escapeHtml(multimodal.action)}</em>
+        </div>
+        <div class="settings-inline-actions">
+          <button type="button" class="outline-btn" data-action="open-model-info">查看模型信息</button>
+          <button type="button" class="outline-btn" data-action="copy-support-bundle">复制支持诊断</button>
+        </div>
+      `)}
+    </div>
+  `
+}
+
+function renderFirstRunWizard() {
+  if (!state.firstRunWizardOpen) return ''
+  const config = state.config || {}
+  const validation = state.validation || {}
+  const integrity = environmentIntegrity({ config, validation })
+  const endpointDiagnosis = portDiagnosis(state.health || { ok: null, kind: 'unchecked', url: state.status?.url, message: '尚未检查端口' })
+  const recommendation = modelRecommendation({ config })
+  const guide = integrationGuide({ config, status: state.status })
+  return `
+    <div class="dialog-backdrop first-run-backdrop" data-action="close-first-run-wizard"></div>
+    <section class="first-run-panel">
+      <div class="first-run-head">
+        <div>
+          <span>首次启动向导</span>
+          <strong>按顺序跑通本地 llama.cpp 服务</strong>
+        </div>
+        <button type="button" class="icon-btn" data-action="close-first-run-wizard">&times;</button>
+      </div>
+      <div class="first-run-body">
+        ${renderModernSettingsCard('1. 环境完整性', '先确认你选的是完整 llama.cpp 包，不是 cudart 运行库包。', renderEnvironmentIntegrityCard(integrity))}
+        ${renderModernSettingsCard('2. 模型文件', '没有 GGUF 模型，端口启动了也无法聊天。', renderPathSnapshot(config, validation))}
+        ${renderModernSettingsCard('3. 推荐参数', '先用保守参数跑通，不要一上来拉满上下文和 GPU 层数。', renderRecommendationCard(recommendation))}
+        ${renderModernSettingsCard('4. 端口诊断', '启动后检查 OpenAI 兼容接口是否真的可用。', renderPortDiagnosisCard(endpointDiagnosis))}
+        ${renderModernSettingsCard('5. 第三方接入', '复制到 Cherry Studio、Open WebUI 或其他 OpenAI 兼容客户端。', renderIntegrationRows(guide))}
+      </div>
+      <div class="first-run-foot">
+        <button type="button" class="outline-btn" data-action="close-first-run-wizard">稍后再说</button>
+        <button type="button" class="outline-btn" data-action="health">检查端口</button>
+        <button type="button" class="primary-btn" data-action="wizard-start">保存并启动</button>
+      </div>
+    </section>
+  `
+}
+
 function renderModernSettingsContent() {
   const tab = currentSettingsTabId()
   const v = state.validation || {}
@@ -1540,6 +2263,10 @@ function renderModernSettingsContent() {
     `
   }
 
+  if (tab === 'rescue') {
+    return renderRescueSettingsContent()
+  }
+
   if (tab === 'display') {
     return `
       <div class="settings-stack">
@@ -1556,9 +2283,10 @@ function renderModernSettingsContent() {
           <div class="form-grid single">
             ${field('model', '模型文件', { pick: 'gguf', hint: '例如 Qwen3.5-9B.Q4_K_M.gguf' })}
             ${field('mmproj', 'mmproj 投影文件', { pick: 'gguf', hint: '视觉或多模态模型才需要' })}
-            ${field('chat_template_kwargs', 'Chat Template Kwargs', { textarea: true, hint: '会同时作为启动参数和每次请求参数发送。可写 {"enable_thinking":false}，也兼容 --chat-template-kwargs \'{\\"enable_thinking\\":false}\'。支持的模型还可加 "thinking_budget": 0。' })}
+            ${selectField('chat_quality_mode', '对话质量模式', ['quality', 'fast'], '质量模式 = 对齐网页端 Reasoning；极速模式 = 关闭 thinking 换取更短延迟。')}
+            ${field('chat_template_kwargs', 'Chat Template Kwargs', { textarea: true, hint: '质量模式留空，使用模型默认 Reasoning；极速模式会写入 {"enable_thinking":false}。也兼容 --chat-template-kwargs \'{\\"enable_thinking\\":false}\'。' })}
           </div>
-          <div class="settings-callout">注意：这是控制模型是否生成思考；下面的“显示思考过程”只是控制桌面端是否把已返回的 <think> 展示出来。图片理解需要视觉模型和 mmproj。</div>
+          <div class="settings-callout">质量模式会优先保证创意代码、复杂推理和长答案质量；下面的“显示思考过程”只是控制桌面端是否把已返回的 <think> 展示出来。图片理解需要视觉模型和 mmproj。</div>
         `)}
         ${renderModernSettingsCard('展示开关', '把网页端常见的显示项集中到一起。', `
           <div class="switch-grid">
@@ -1655,6 +2383,41 @@ function renderModernSettingsContent() {
     `
   }
 
+  if (tab === 'appearance') {
+    return `
+      <div class="settings-stack">
+        ${renderModernSettingsCard('外观', '把最影响观感的几项集中到一起，顺手做一轮界面收紧。', `
+          <div class="form-grid single">
+            ${selectField('theme_mode', '界面主题', ['system', 'light', 'dark'], '跟随系统会读取 Windows 当前深浅色。')}
+          </div>
+          <div class="appearance-preview">
+            <div class="appearance-preview-sidebar">
+              <span></span>
+              <strong>llama.cpp</strong>
+              <em>Local endpoint</em>
+            </div>
+            <div class="appearance-preview-chat">
+              <p>你好，我可以直接读取本地附件，也能把网页代码做成可预览结果。</p>
+              <code>http://127.0.0.1:8080/v1</code>
+            </div>
+          </div>
+        `)}
+        ${renderModernSettingsCard('聊天字体', '只影响对话内容，不改变设置面板和按钮尺寸。', `
+          <div class="form-grid single">
+            ${selectField('chat_font', '聊天字体', ['default', 'sans', 'system', 'readable'], '易读模式会使用更宽松的行高和更稳的中文字体栈。')}
+          </div>
+        `)}
+        ${renderModernSettingsCard('关于', '应用标识与版本信息。', `
+          <div class="about-card">
+            <strong>llama.cpp Desktop</strong>
+            <span>Windows 桌面客户端</span>
+            <em>v0.6.13</em>
+          </div>
+        `)}
+      </div>
+    `
+  }
+
   return renderModernSettingsCard('日志', 'ANSI 颜色码已被过滤，方便直接看真正的 llama.cpp 输出。', `
     <div class="log-box" id="logBox">
       ${
@@ -1722,14 +2485,16 @@ function render(options = {}) {
     return
   }
 
+  applyAppearancePreferences()
   const previousFeed = document.getElementById('chatFeed')
   const previousFeedTop = previousFeed?.scrollTop || 0
   const previousFeedHeight = previousFeed?.scrollHeight || 0
-  const shouldStick = options.stickToBottom ?? isNearBottom(previousFeed)
+  const hasChatMessages = state.chatMessages.length > 0
+  const shouldStick = hasChatMessages && (options.stickToBottom ?? isNearBottom(previousFeed))
   const running = state.status.state === 'running' || state.status.state === 'starting'
   appEl.innerHTML = `
     <div class="drag-region">
-      <button type="button" class="sidebar-toggle" data-action="toggle-sidebar" title="${state.sidebarCollapsed ? '显示侧边栏' : '隐藏侧边栏'}">${renderSidebarToggleIcon()}</button>
+      <span></span>
       <button type="button" class="gear-btn" data-action="toggle-settings" title="打开设置">${renderGearIcon()}</button>
     </div>
     <div class="app-shell ${state.sidebarCollapsed ? 'sidebar-collapsed' : ''}">
@@ -1758,13 +2523,16 @@ function render(options = {}) {
     ${renderPreviewModal()}
     ${renderModelInfoModal()}
     ${renderHistoryDialog()}
+    ${renderFirstRunWizard()}
     ${renderAttachmentMenuPortal()}
     <div class="toast ${state.toast ? 'show' : ''}">${escapeHtml(state.toast)}</div>
   `
 
   const chatFeed = document.getElementById('chatFeed')
   if (chatFeed) {
-    if (options.jumpToBottom) {
+    if (!hasChatMessages) {
+      chatFeed.scrollTop = options.preserveChatScroll && previousFeed ? previousFeedTop : 0
+    } else if (options.jumpToBottom) {
       chatFeed.scrollTop = chatFeed.scrollHeight
     } else if (options.preserveChatScroll && previousFeed) {
       chatFeed.scrollTop = shouldStick ? chatFeed.scrollHeight : previousFeedTop + (chatFeed.scrollHeight - previousFeedHeight)
@@ -1818,15 +2586,16 @@ function applyStreamDelta(payload) {
   const lastIndex = state.chatMessages.length - 1
   if (payload.delta) {
     last.content = `${last.content || ''}${payload.delta}`
-    updateMessageDom(lastIndex)
+    scheduleStreamRender(lastIndex)
   }
   if (payload.thinkingDelta) {
     last.thinking = `${last.thinking || ''}${payload.thinkingDelta}`
-    updateMessageDom(lastIndex)
+    scheduleStreamRender(lastIndex)
   }
   if (payload.done) {
-    last.content = payload.content || last.content || '模型返回了空内容。'
+    flushStreamRender()
     last.thinking = payload.thinking || last.thinking || ''
+    last.content = payload.content || last.content || (last.thinking ? '' : '模型返回了空内容。')
     updateLiveStats(last)
     last.streaming = false
     saveCurrentSession()
@@ -1879,7 +2648,41 @@ async function stop() {
 
 async function health() {
   const result = await window.llamaDesktop.testHealth({ config: state.config })
-  setToast(result.ok ? `端口正常：${result.url}` : `端口未响应：${result.message || result.url}`)
+  state.health = result
+  const diagnosis = portDiagnosis(result)
+  setToast(result.ok ? `端口正常：${result.endpointBase || `${result.url}/v1`}` : `${diagnosis.title}：${diagnosis.action}`)
+  render({ preserveChatScroll: true })
+}
+
+async function inspectPort() {
+  state.busy = true
+  render({ preserveChatScroll: true })
+  try {
+    state.portInspection = await window.llamaDesktop.inspectPort({ config: state.config })
+    const plan = portRepairPlan({ config: state.config || {}, status: state.status, inspection: state.portInspection, health: state.health })
+    setToast(`${plan.title}：${plan.action}`)
+  } catch (error) {
+    setToast(error?.message || String(error))
+  } finally {
+    state.busy = false
+    render({ preserveChatScroll: true })
+  }
+}
+
+async function clientSmokeTest() {
+  state.busy = true
+  render({ preserveChatScroll: true })
+  try {
+    state.clientSmoke = await window.llamaDesktop.clientSmokeTest({ config: state.config })
+    const plan = clientSmokePlan({ config: state.config || {}, status: state.status, smoke: state.clientSmoke })
+    setToast(`${plan.title}：${plan.action}`)
+  } catch (error) {
+    state.clientSmoke = { ok: false, message: error?.message || String(error) }
+    setToast(error?.message || String(error))
+  } finally {
+    state.busy = false
+    render({ preserveChatScroll: true })
+  }
 }
 
 async function openModelInfo() {
@@ -1983,17 +2786,21 @@ async function sendChat() {
       messages: buildApiMessages(state.chatMessages.slice(0, -1)),
     })
     const latencyMs = Math.round(performance.now() - startedAt)
-    const tokens = result.raw?.usage?.total_tokens || result.raw?.usage?.completion_tokens || ''
-    const speed = tokens && latencyMs ? `${(Number(tokens) / (latencyMs / 1000)).toFixed(2)} t/s` : ''
     const assistant = assistantForRequest(requestId)
     if (assistant?.role === 'assistant') {
-      const estimatedTokens = estimateTokens(assistant.content || result.content)
-      assistant.content = result.content || assistant.content || '模型返回了空内容。'
       assistant.thinking = result.thinking || assistant.thinking || ''
-      assistant.tokens = tokens || estimatedTokens
+      assistant.content = result.content || assistant.content || (assistant.thinking ? '' : '模型返回了空内容。')
+      const estimatedTokens = estimateTokens(generatedTextForStats(assistant))
+      const stats = responseStats(result.raw, generatedTextForStats(assistant), latencyMs)
+      assistant.tokens = stats.tokens || estimatedTokens
       assistant.estimatedTokens = estimatedTokens
       assistant.latencyMs = latencyMs
-      assistant.speed = speed || (assistant.tokens ? `${(Number(assistant.tokens) / (latencyMs / 1000)).toFixed(2)} t/s` : '')
+      assistant.speed = stats.speed || ''
+      assistant.speedSource = stats.speedSource || ''
+      if (!assistant.speed && assistant.tokens) {
+        assistant.liveSpeed = `${(Number(assistant.tokens) / (latencyMs / 1000)).toFixed(2)} t/s`
+        assistant.liveSpeedSource = 'estimate'
+      }
       assistant.streaming = false
       assistant.state = ''
     }
@@ -2037,17 +2844,21 @@ async function retryMessage(index) {
       messages: buildApiMessages(state.chatMessages.slice(0, -1)),
     })
     const latencyMs = Math.round(performance.now() - startedAt)
-    const tokens = result.raw?.usage?.total_tokens || result.raw?.usage?.completion_tokens || ''
-    const speed = tokens && latencyMs ? `${(Number(tokens) / (latencyMs / 1000)).toFixed(2)} t/s` : ''
     const assistant = assistantForRequest(requestId)
     if (assistant?.role === 'assistant') {
-      const estimatedTokens = estimateTokens(assistant.content || result.content)
-      assistant.content = result.content || assistant.content || `基于“${userMessage.content}”重试后，模型返回了空内容。`
       assistant.thinking = result.thinking || assistant.thinking || ''
-      assistant.tokens = tokens || estimatedTokens
+      assistant.content = result.content || assistant.content || (assistant.thinking ? '' : `基于“${userMessage.content}”重试后，模型返回了空内容。`)
+      const estimatedTokens = estimateTokens(generatedTextForStats(assistant))
+      const stats = responseStats(result.raw, generatedTextForStats(assistant), latencyMs)
+      assistant.tokens = stats.tokens || estimatedTokens
       assistant.estimatedTokens = estimatedTokens
       assistant.latencyMs = latencyMs
-      assistant.speed = speed || (assistant.tokens ? `${(Number(assistant.tokens) / (latencyMs / 1000)).toFixed(2)} t/s` : '')
+      assistant.speed = stats.speed || ''
+      assistant.speedSource = stats.speedSource || ''
+      if (!assistant.speed && assistant.tokens) {
+        assistant.liveSpeed = `${(Number(assistant.tokens) / (latencyMs / 1000)).toFixed(2)} t/s`
+        assistant.liveSpeedSource = 'estimate'
+      }
       assistant.streaming = false
       assistant.state = ''
     }
@@ -2093,18 +2904,7 @@ async function pickAttachment(kind) {
   try {
     const picked = await window.llamaDesktop.pickAttachments({ kind })
     if (picked?.length) {
-      state.attachments = [...state.attachments, ...picked]
-      state.attachmentMenuOpen = false
-      state.attachmentMenuPosition = null
-      const hasImage = picked.some(item => item.kind === 'image')
-      const hasLargeImage = picked.some(item => item.kind === 'image' && !item.dataUrl)
-      if (hasLargeImage) {
-        setToast('图片已添加，但文件较大，只会作为附件记录路径。')
-      } else if (hasImage && !state.config?.mmproj) {
-        setToast('图片已添加；未配置 mmproj 时，普通文本模型可能看不懂图片。')
-      } else {
-        setToast(`${attachmentLabel(kind)}已添加`)
-      }
+      addAttachments(picked, `${attachmentLabel(kind)}已添加`)
     } else {
       state.attachmentMenuOpen = false
       state.attachmentMenuPosition = null
@@ -2115,8 +2915,135 @@ async function pickAttachment(kind) {
   }
 }
 
+function addAttachments(picked, fallbackMessage = '文件已添加') {
+  state.attachments = [...state.attachments, ...picked]
+  state.attachmentMenuOpen = false
+  state.attachmentMenuPosition = null
+  state.draggingFiles = false
+  state.dragDepth = 0
+  const errors = picked.filter(item => item.error)
+  const hasImage = picked.some(item => item.kind === 'image')
+  const hasLargeImage = picked.some(item => item.kind === 'image' && !item.dataUrl)
+  if (errors.length) {
+    setToast(`已添加 ${picked.length} 个文件，其中 ${errors.length} 个只记录路径。`)
+  } else if (hasLargeImage) {
+    setToast('图片已添加，但文件较大，只会作为附件记录路径。')
+  } else if (hasImage && !state.config?.mmproj) {
+    setToast('图片已添加；未配置 mmproj 时，普通文本模型可能看不懂图片。')
+  } else {
+    setToast(fallbackMessage)
+  }
+}
+
+function dragHasFiles(dataTransfer) {
+  return Array.from(dataTransfer?.types || []).includes('Files')
+}
+
+function droppedFiles(dataTransfer) {
+  return Array.from(dataTransfer?.files || [])
+}
+
+function droppedFilePath(file) {
+  return file?.path || file?.webkitRelativePath || ''
+}
+
+function droppedFilePaths(files) {
+  return files
+    .map(file => droppedFilePath(file))
+    .filter(Boolean)
+}
+
+function droppedMimeForFile(file) {
+  const name = String(file?.name || '').toLowerCase()
+  if (file?.type) return file.type
+  if (/\.(png)$/i.test(name)) return 'image/png'
+  if (/\.(jpe?g)$/i.test(name)) return 'image/jpeg'
+  if (/\.(webp)$/i.test(name)) return 'image/webp'
+  if (/\.(gif)$/i.test(name)) return 'image/gif'
+  if (/\.(bmp)$/i.test(name)) return 'image/bmp'
+  if (/\.(pdf)$/i.test(name)) return 'application/pdf'
+  if (/\.(mp3)$/i.test(name)) return 'audio/mpeg'
+  if (/\.(wav)$/i.test(name)) return 'audio/wav'
+  if (/\.(flac)$/i.test(name)) return 'audio/flac'
+  if (/\.(m4a)$/i.test(name)) return 'audio/mp4'
+  if (/\.(ogg)$/i.test(name)) return 'audio/ogg'
+  if (/\.(txt|md|json|toml|ya?ml|csv|log|py|js|ts|tsx|html|css|c|cpp|h|hpp)$/i.test(name)) return 'text/plain'
+  return 'application/octet-stream'
+}
+
+function droppedKindForFile(file, mime = droppedMimeForFile(file)) {
+  const name = String(file?.name || '').toLowerCase()
+  if (mime.startsWith('image/')) return 'image'
+  if (mime.startsWith('audio/')) return 'audio'
+  if (mime === 'application/pdf' || name.endsWith('.pdf')) return 'pdf'
+  if (mime.startsWith('text/') || /\.(txt|md|json|toml|ya?ml|csv|log|py|js|ts|tsx|html|css|c|cpp|h|hpp)$/i.test(name)) return 'text'
+  return 'file'
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer)
+  const chunkSize = 0x8000
+  const chunks = []
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    chunks.push(String.fromCharCode(...bytes.subarray(index, index + chunkSize)))
+  }
+  return btoa(chunks.join(''))
+}
+
+async function readDroppedFileAsAttachment(file) {
+  const mime = droppedMimeForFile(file)
+  const kind = droppedKindForFile(file, mime)
+  const attachment = {
+    name: file.name || 'dropped-file',
+    size: file.size || 0,
+    mime,
+    kind,
+    source: 'drop',
+  }
+
+  if (kind === 'image' && file.size <= 10 * 1024 * 1024) {
+    const base64 = arrayBufferToBase64(await file.arrayBuffer())
+    attachment.dataUrl = `data:${attachment.mime};base64,${base64}`
+  }
+
+  if (kind === 'text' && file.size <= 256 * 1024) {
+    attachment.text = await file.text()
+  }
+
+  return attachment
+}
+
+async function droppedFileAttachments(files) {
+  const paths = droppedFilePaths(files)
+  const pathSet = new Set(paths)
+  const embeddedFiles = files.filter(file => !pathSet.has(droppedFilePath(file)))
+  const attachments = []
+
+  try {
+    if (paths.length) {
+      attachments.push(...(await window.llamaDesktop.importAttachments({ paths }) || []))
+    }
+    for (const file of embeddedFiles) {
+      attachments.push(await readDroppedFileAsAttachment(file))
+    }
+  } catch (error) {
+    setToast(error.message || String(error))
+  }
+
+  return attachments
+}
+
+async function importDroppedFiles(files) {
+  const picked = await droppedFileAttachments(files)
+  if (picked.length) {
+    addAttachments(picked, `已拖入 ${picked.length} 个文件`)
+  } else {
+    setToast('拖拽来源没有提供可读取的文件，请从文件夹拖入原文件。')
+  }
+}
+
 appEl.addEventListener('click', event => {
-  const target = event.target.closest('button, .settings-backdrop, .preview-backdrop, .dialog-backdrop, .attach-menu-backdrop')
+  const target = event.target.closest('[data-section], button, .settings-backdrop, .preview-backdrop, .dialog-backdrop, .attach-menu-backdrop')
   if (!target) return
 
   const seed = target.dataset.seed
@@ -2135,10 +3062,9 @@ appEl.addEventListener('click', event => {
     return
   }
 
-  const section = target.dataset.section
+  const section = target.dataset.section || target.closest('[data-section]')?.dataset.section
   if (section) {
-    state.active = section
-    state.settingsOpen = true
+    openSettingsSection(section)
     render()
     return
   }
@@ -2150,6 +3076,23 @@ appEl.addEventListener('click', event => {
   }
 
   const action = target.dataset.action
+  if (action === 'toggle-thinking') {
+    event.preventDefault()
+    const key = target.dataset.thinkingKey || ''
+    if (key) {
+      const isOpen = state.openThinkingMessages.has(key) ||
+        (Boolean(state.config?.expand_thinking) && !state.closedThinkingMessages.has(key))
+      if (isOpen) {
+        state.openThinkingMessages.delete(key)
+        state.closedThinkingMessages.add(key)
+      } else {
+        state.closedThinkingMessages.delete(key)
+        state.openThinkingMessages.add(key)
+      }
+      updateMessageDom(Number(target.dataset.messageIndex))
+    }
+    return
+  }
   if (action === 'toggle-history-menu') {
     state.historyMenuId = state.historyMenuId === target.dataset.sessionId ? '' : target.dataset.sessionId
     render({ preserveChatScroll: true })
@@ -2177,6 +3120,108 @@ appEl.addEventListener('click', event => {
     })
     void navigator.clipboard.writeText(text)
     setToast('终端诊断已复制，可直接粘贴给排查人员')
+    return
+  }
+  if (action === 'toggle-run-check') {
+    state.runCheckExpanded = !state.runCheckExpanded
+    render({ preserveChatScroll: true })
+    return
+  }
+  if (action === 'open-downloads') {
+    void window.llamaDesktop.openUrl(downloadGuidance().releaseUrl)
+    setToast('已打开 llama.cpp 官方 releases 页面')
+    return
+  }
+  if (action === 'copy-download-guidance') {
+    void navigator.clipboard.writeText(downloadGuidance().copyText)
+    setToast('下载说明已复制')
+    return
+  }
+  if (action === 'inspect-port') {
+    void inspectPort()
+    return
+  }
+  if (action === 'apply-port-fix') {
+    const plan = portRepairPlan({ config: state.config || {}, status: state.status, inspection: state.portInspection, health: state.health })
+    if (plan.canApply && plan.suggestedPort) {
+      state.config.port = plan.suggestedPort
+      state.dirty = true
+      setToast(`已改用端口 ${plan.suggestedPort}，保存并重启后生效`)
+      render({ preserveChatScroll: true })
+    }
+    return
+  }
+  if (action === 'client-smoke-test') {
+    void clientSmokeTest()
+    return
+  }
+  if (action === 'copy-integration-guide') {
+    const text = integrationGuide({ config: state.config, status: state.status }).copyText
+    void navigator.clipboard.writeText(text)
+    setToast('第三方接入信息已复制')
+    return
+  }
+  if (action === 'copy-support-bundle') {
+    const text = supportBundleText({
+      config: state.config,
+      validation: state.validation,
+      status: state.status,
+      dirty: state.dirty,
+    })
+    void navigator.clipboard.writeText(text)
+    setToast('支持诊断已复制')
+    return
+  }
+  if (action === 'copy-feedback-bundle') {
+    const parts = [
+      supportBundleText({
+        config: state.config,
+        validation: state.validation,
+        status: state.status,
+        dirty: state.dirty,
+      }),
+      '',
+      `Health: ${JSON.stringify(state.health || null)}`,
+      `Port inspection: ${JSON.stringify(state.portInspection || null)}`,
+      `System: ${JSON.stringify(state.systemInfo || null)}`,
+      `Client smoke: ${JSON.stringify(state.clientSmoke || null)}`,
+    ]
+    void navigator.clipboard.writeText(parts.join('\n'))
+    setToast('反馈诊断已复制，不会自动上传')
+    return
+  }
+  if (action === 'open-first-run-wizard') {
+    state.firstRunWizardOpen = true
+    state.settingsOpen = false
+    render({ preserveChatScroll: true })
+    return
+  }
+  if (action === 'close-first-run-wizard') {
+    state.firstRunWizardOpen = false
+    state.firstRunWizardSeen = true
+    try {
+      window.localStorage?.setItem('llama-desktop:first-run-seen', '1')
+    } catch {}
+    render({ preserveChatScroll: true })
+    return
+  }
+  if (action === 'apply-recommended-params') {
+    const recommendation = modelRecommendation({ config: state.config || {} })
+    state.config.ctx_size = recommendation.profile.ctxSize
+    state.config.n_gpu_layers = recommendation.profile.gpuLayers
+    state.config.batch_size = recommendation.profile.batchSize
+    state.dirty = true
+    setToast('已应用保守推荐参数，保存后生效')
+    render({ preserveChatScroll: true })
+    return
+  }
+  if (action === 'wizard-start') {
+    state.firstRunWizardSeen = true
+    state.firstRunWizardOpen = false
+    try {
+      window.localStorage?.setItem('llama-desktop:first-run-seen', '1')
+    } catch {}
+    void start()
     return
   }
   if (action === 'copy-launch-command') {
@@ -2239,12 +3284,11 @@ appEl.addEventListener('click', event => {
     render({ jumpToBottom: true, resetHistoryScroll: true })
   }
   if (action === 'toggle-settings') {
-    state.settingsOpen = !state.settingsOpen
-    if (state.settingsOpen && !settingsTabs.some(([id]) => id === state.active)) {
-      state.active = 'overview'
+    if (state.settingsOpen) {
+      state.settingsOpen = false
+    } else {
+      openSettingsSection(settingsTabs.some(([id]) => id === state.active) ? state.active : 'overview')
     }
-    state.attachmentMenuOpen = false
-    state.attachmentMenuPosition = null
     render()
   }
   if (action === 'toggle-attachment-menu') {
@@ -2273,6 +3317,14 @@ appEl.addEventListener('click', event => {
   if (action === 'preview-code') {
     const block = getCodeBlock(target.dataset.messageIndex, target.dataset.codeIndex)
     if (block) {
+      const previewError = validateCodePreview(block.language || 'html', block.value || '')
+      if (previewError) {
+        state.preview = null
+        state.previewError = previewError
+        setToast(previewError)
+        return
+      }
+      state.previewError = ''
       state.preview = {
         type: 'code',
         code: block.value || '',
@@ -2280,6 +3332,21 @@ appEl.addEventListener('click', event => {
         title: `${String(block.language || 'HTML').toUpperCase()} 预览`,
       }
       render({ preserveChatScroll: true })
+    }
+  }
+  if (action === 'download-code') {
+    const block = getCodeBlock(target.dataset.messageIndex, target.dataset.codeIndex)
+    if (block) {
+      const blob = new Blob([block.value || ''], { type: 'text/html;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = 'llama-artifact.html'
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+      setToast('HTML 已保存')
     }
   }
   if (action === 'preview-image') {
@@ -2373,8 +3440,7 @@ appEl.addEventListener('click', event => {
     render()
   }
   if (action === 'open-log-settings') {
-    state.active = 'logs'
-    state.settingsOpen = true
+    openSettingsSection('logs')
     state.view = 'terminal'
     state.sidebarPanel = 'chats'
     render()
@@ -2389,6 +3455,41 @@ appEl.addEventListener('click', event => {
   if (action === 'health') void health()
   if (action === 'send-chat') void sendChat()
   if (action === 'cancel-chat') void cancelChat()
+})
+
+appEl.addEventListener('dragenter', event => {
+  if (!dragHasFiles(event.dataTransfer)) return
+  event.preventDefault()
+  state.dragDepth += 1
+  if (!state.draggingFiles) {
+    state.draggingFiles = true
+    render({ preserveChatScroll: true })
+  }
+})
+
+appEl.addEventListener('dragover', event => {
+  if (!dragHasFiles(event.dataTransfer)) return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'copy'
+})
+
+appEl.addEventListener('dragleave', event => {
+  if (!dragHasFiles(event.dataTransfer)) return
+  state.dragDepth = Math.max(0, state.dragDepth - 1)
+  if (state.dragDepth === 0 && state.draggingFiles) {
+    state.draggingFiles = false
+    render({ preserveChatScroll: true })
+  }
+})
+
+appEl.addEventListener('drop', event => {
+  if (!dragHasFiles(event.dataTransfer)) return
+  event.preventDefault()
+  const files = droppedFiles(event.dataTransfer)
+  state.dragDepth = 0
+  state.draggingFiles = false
+  render({ preserveChatScroll: true })
+  void importDroppedFiles(files)
 })
 
 appEl.addEventListener('input', event => {
@@ -2414,6 +3515,12 @@ appEl.addEventListener('input', event => {
     state.config[name] = localNumberValue(input)
   } else {
     state.config[name] = input.value
+  }
+  if (name === 'chat_quality_mode') {
+    applyChatQualityMode(input.value)
+  }
+  if (name === 'theme_mode' || name === 'chat_font') {
+    applyAppearancePreferences()
   }
   if (name === 'llama_bin_dir') {
     state.config.llama_server_path = `${String(input.value || '').replace(/[\\/]+$/, '')}\\llama-server.exe`
@@ -2449,7 +3556,24 @@ async function init() {
     loadSessions()
     if (!state.currentSessionId) state.currentSessionId = makeSessionId()
     patchFromBackend(await window.llamaDesktop.getState())
+    try {
+      state.firstRunWizardSeen = window.localStorage?.getItem('llama-desktop:first-run-seen') === '1'
+    } catch {
+      state.firstRunWizardSeen = false
+    }
+    state.firstRunWizardOpen = shouldShowFirstRunWizard({
+      config: state.config,
+      validation: state.validation,
+      status: state.status,
+      seen: state.firstRunWizardSeen,
+    })
     render()
+    window.llamaDesktop.getSystemInfo?.()
+      .then(info => {
+        state.systemInfo = info
+        render({ preserveChatScroll: true })
+      })
+      .catch(() => {})
   } catch (error) {
     appEl.innerHTML = `<div class="boot">${escapeHtml(error.message || String(error))}</div>`
   }
